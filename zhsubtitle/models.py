@@ -50,7 +50,7 @@ class VideoMeta:
 
         # 1. Douban ID
         if self.douban_id:
-            chips.append((f"豆瓣 ID: {self.douban_id}", self.douban_id))
+            chips.append((f"Douban ID: {self.douban_id}", self.douban_id))
 
         # 2. Chinese Title + Season / Year
         best_cn = self.cn_title or self.alternative_title or self.title
@@ -60,15 +60,15 @@ class VideoMeta:
                 cn_query = best_cn
             else:
                 cn_query = f"{best_cn} {cn_season}".strip()
-            chips.append((f"中文+季数: {cn_query}", cn_query))
+            chips.append((f"CN Title + Season: {cn_query}", cn_query))
         elif self.year:
             if str(self.year) in best_cn:
                 cn_query = best_cn
             else:
                 cn_query = f"{best_cn} {self.year}".strip()
-            chips.append((f"中文+年份: {cn_query}", cn_query))
+            chips.append((f"CN Title + Year: {cn_query}", cn_query))
         elif best_cn:
-            chips.append((f"中文名: {best_cn}", best_cn))
+            chips.append((f"CN Title: {best_cn}", best_cn))
 
         # 3. IMDb ID
         if self.imdb_id:
@@ -77,11 +77,11 @@ class VideoMeta:
         # 4. English Title + Season / Year
         if self.title:
             if self.is_tv and self.season:
-                chips.append((f"英文+季数: {self.title} S{self.season:02d}", f"{self.title} S{self.season:02d}"))
+                chips.append((f"EN Title + Season: {self.title} S{self.season:02d}", f"{self.title} S{self.season:02d}"))
             elif self.year:
-                chips.append((f"英文+年份: {self.title} {self.year}", f"{self.title} {self.year}"))
+                chips.append((f"EN Title + Year: {self.title} {self.year}", f"{self.title} {self.year}"))
             else:
-                chips.append((f"英文名: {self.title}", self.title))
+                chips.append((f"EN Title: {self.title}", self.title))
 
         return chips
 

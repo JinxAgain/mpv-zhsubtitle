@@ -150,7 +150,7 @@ class SubtitlePickerGui:
         self.use_zimuku_var = tk.BooleanVar(value=self.config.is_provider_enabled("zimuku"))
 
         ttk.Checkbutton(input_row, text="SubHD", variable=self.use_subhd_var).pack(side=tk.LEFT, padx=4)
-        ttk.Checkbutton(input_row, text="Zimuku (字幕库)", variable=self.use_zimuku_var).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(input_row, text="Zimuku", variable=self.use_zimuku_var).pack(side=tk.LEFT, padx=4)
 
         # Search Button
         self.search_btn = tk.Button(

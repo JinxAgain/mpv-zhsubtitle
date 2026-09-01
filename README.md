@@ -1,128 +1,137 @@
 # mpv-zhsubtitle
 
-A powerful, modern MPV subtitle search and download tool with support for **SubHD** and **Zimuku** (`srtku.com` / `zmk.pw` / `zimuku.org`), powered by **GuessIt** for smart video filename parsing.
-
-Referencing and integrating core techniques from [qzydustin/service.subtitles.chinesesubtitles](https://github.com/qzydustin/service.subtitles.chinesesubtitles) and [moonlin1213/subtitle-finder](https://github.com/moonlin1213/subtitle-finder).
+An intelligent, high-precision Chinese subtitle search and download plugin for **MPV** and **mpv.net**. It seamlessly integrates **SubHD** and **Zimuku (字幕库)** with guessit-based video metadata parsing, automated WAF/captcha bypassing, two-stage Douban & IMDb bridge resolution, and an interactive dark-themed GUI with quick search chips.
 
 ---
 
 ## ✨ Features
 
-- 🔍 **Dual Provider Integration with Concurrent Speed**:
-  - **SubHD**: Token-based download flow without login (`prepare-download` -> `/down/{sid}` -> `/api/sub/down`).
-  - **Zimuku (`srtku.com` / `zmk.pw` / `zimuku.org`)**: Automated Yunsuo WAF bypass with 5-digit BMP template-matching captcha solver.
-  - **Multithreading**: Simultaneous concurrent queries across providers for fast results (2-3 seconds).
-- 🧠 **GuessIt Metadata Parsing**:
-  - Automatically extracts clean movie titles, Chinese alternative titles, year, season, episode, release groups (`WiKi`, `FLUX`, `REMUX`, etc.), and source format.
-  - Generates intelligent search query permutations to maximize Chinese subtitle match rates.
-- 📦 **Archive Extraction & Clean Output**:
-  - Supports `.zip` (with GBK/CP936 charset recovery), `.gz`, `.tar`, and other archive formats.
-  - Automatically extracts **only the clean subtitle file** (`.ass`, `.srt`, `.ssa`, `.vtt`, `.sub`), leaving no leftover archive clutter.
-  - Configurable extraction location: save alongside the video or to a dedicated subtitle directory.
-  - Optional renaming to match video filename (e.g. `<video_name>.zh-CN.ass`).
-- ⚡ **Dual Interaction Modes**:
-  - **One-Key Auto Download (`Ctrl+Shift+s`)**: Uses GuessIt to search, select the best-matching subtitle, download, extract, and load it into MPV instantly with on-screen OSD feedback.
-  - **Interactive Visual GUI (`Ctrl+Shift+a`)**: Opens a modern dark-themed window with the search query pre-filled, displaying subtitle details (Format, Type, Fansub group, Match score), allowing manual keyword editing and point-and-click downloading.
-- 📝 **Detailed Logging**:
-  - Automatically writes diagnostics, queries, and download status to `zhsubtitle.log` in your MPV / mpv.net folder for easy troubleshooting.
-- 💻 **Standalone CLI**: Can also be executed directly in the terminal outside of MPV.
+- ⚡ **Two-Stage Precision Resolution**: Automatically resolves video work level metadata on Zimuku, extracts **Douban ID** / **IMDb ID** / localized Chinese titles, and bridges to SubHD to fetch 100% of matching season/movie subtitles without keyword mismatches.
+- 🎯 **GuessIt Metadata Parsing**: Automatically parses video filenames into clean titles, seasons, episodes, years, audio/video codecs, and release groups.
+- 🖼️ **Modern Dark-Themed GUI**: Interactive graphical interface featuring:
+  - Instant pre-loading of all matched subtitles on launch.
+  - Pre-filled Douban ID in search box.
+  - Interactive **Quick Search Chips** for one-click query switching (`Douban ID`, `CN Title + Season`, `IMDb ID`, `EN Title + Season`).
+  - Search results table displaying Source, Format, Type, Fansub / Group, Release Name, and Match Score.
+- 🚀 **Asynchronous & Concurrent**: Multi-threaded parallel search across SubHD and Zimuku with sub-second response times and zero MPV playback stutter.
+- 🛡️ **Yunsuo WAF & Anti-Bot Auto-Solver**: Built-in 5-digit BMP template-matching solver that bypasses Zimuku WAF challenges on the fly.
+- 🌐 **Multi-Domain & Failover Support**: Built-in fallback mirrors for SubHD (`subhd.tv`, `subhd.me`, `subhd.one`) and Zimuku (`srtku.com`, `zmk.pw`, `zimuku.org`).
+- 📦 **In-Memory Archive Extraction**: Automatically inspects `.zip`, `.rar`, `.7z`, and `.tar.gz` archives in memory and extracts only the desired subtitle format (`.srt`, `.ass`, `.ssa`, `.vtt`) for the exact target episode.
+- 🔤 **Smart Encoding Detection**: Automatically converts legacy GBK / GB2312 / Big5 subtitles into standard UTF-8.
+- ⚙️ **Native MPV Configuration**: Full support for standard MPV `script-opts/zhsubtitle.conf`.
 
 ---
 
 ## 📥 Installation
 
-### 1. Install Python Dependencies
+### 1. Requirements
 
-Ensure Python 3.8+ is installed on your system, then install the required dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-*(Dependencies: `guessit`, `requests`, `beautifulsoup4`)*
+- **Python 3.8+** (Must be added to system `PATH` or configured in `zhsubtitle.conf`)
+- Install Python dependencies:
+  ```bash
+  pip install -r requirements.txt
+  ```
 
 ### 2. Install to MPV / mpv.net
 
-Simply place the entire `mpv-zhsubtitle` folder directly into your MPV / mpv.net `scripts` directory:
+#### For `mpv.net`:
+1. Copy the `mpv-zhsubtitle` repository folder into your `mpv.net` scripts directory:
+   ```text
+   %APPDATA%\mpv.net\scripts\mpv-zhsubtitle\
+   ```
+2. Ensure the folder contains `main.lua` and `main.py`.
 
-#### Windows (mpv.net / MPV)
-```powershell
-# For mpv.net:
-Copy-Item -Recurse . -Destination "$env:APPDATA\mpv.net\scripts\mpv-zhsubtitle"
-
-# For standard mpv:
-Copy-Item -Recurse . -Destination "$env:APPDATA\mpv\scripts\mpv-zhsubtitle"
-```
-
-#### Linux / macOS
-```bash
-mkdir -p ~/.config/mpv/scripts
-cp -r . ~/.config/mpv/scripts/mpv-zhsubtitle
-```
-
-*(MPV automatically recognizes `main.lua` in the folder and loads it as a complete package).*
+#### For standard `mpv`:
+1. Copy the `mpv-zhsubtitle` repository folder into your `mpv` scripts directory:
+   ```text
+   %APPDATA%\mpv\scripts\mpv-zhsubtitle\
+   ```
+   *(On Linux/macOS: `~/.config/mpv/scripts/mpv-zhsubtitle/`)*
 
 ---
 
 ## ⌨️ Keybindings
 
-| Shortcut | Action | Script Binding Name |
-| :--- | :--- | :--- |
-| `Ctrl+Shift+s` | **One-Key Auto Search & Download** | `zhsubtitle_auto` |
-| `Ctrl+Shift+a` | **Open Visual GUI Search & Picker** | `zhsubtitle_gui` |
+Default shortcuts configured in the script:
 
-### Customizing Keybindings
+| Shortcut | Description |
+| :--- | :--- |
+| `Ctrl+Shift+s` | **Main Shortcut**: Opens interactive Subtitle Picker GUI (or auto-downloads if configured) |
+| `Ctrl+Shift+a` | **Dedicated GUI Shortcut**: Always opens the graphical subtitle picker window |
+| `Ctrl+Shift+d` | **Dedicated Auto Shortcut**: Directly downloads and loads the highest-matching subtitle |
 
-You can bind custom shortcuts in your `input.conf` (located in `~/.config/mpv/input.conf` or `%APPDATA%\mpv.net\input.conf` / `%APPDATA%\mpv\input.conf`):
+### Customizing Keybindings in `input.conf`
+
+You can customize bindings in your `input.conf`:
 
 ```conf
-# Examples in input.conf:
-Ctrl+Shift+s script-binding zhsubtitle_auto
-Ctrl+Shift+a script-binding zhsubtitle_gui
+# Trigger default action (GUI or Auto based on zhsubtitle.conf)
+Ctrl+Shift+s script-binding zhsubtitle_shortcut
 
-# Or single-key shortcuts:
+# Dedicated bindings
+Ctrl+Shift+a script-binding zhsubtitle_gui
+Ctrl+Shift+d script-binding zhsubtitle_auto
+
+# Or custom single-key bindings:
 b script-binding zhsubtitle_auto
 B script-binding zhsubtitle_gui
-
-# Or function keys:
-F8 script-binding zhsubtitle_auto
-F9 script-binding zhsubtitle_gui
 ```
 
 ---
 
-## ⚙️ Configuration (配置方式)
+## ⚙️ Configuration (`zhsubtitle.conf`)
 
-推荐使用标准 MPV 配置文件 **`script-opts/zhsubtitle.conf`**。
+Configuration is managed via the standard MPV option file **`script-opts/zhsubtitle.conf`**.
 
-复制 `zhsubtitle.example.conf` 并重命名放置到你的 MPV 配置目录中的 `script-opts` 文件夹：
-- **mpv.net 路径**: `%APPDATA%\mpv.net\script-opts\zhsubtitle.conf`
-- **mpv 路径**: `%APPDATA%\mpv\script-opts\zhsubtitle.conf`
+Copy `zhsubtitle.example.conf` to your MPV `script-opts` folder:
+- **mpv.net path**: `%APPDATA%\mpv.net\script-opts\zhsubtitle.conf`
+- **mpv path**: `%APPDATA%\mpv\script-opts\zhsubtitle.conf`
+
+### Configuration Options Reference
 
 ```conf
 # ------------------------------------------------------------------------------
-# 快捷键与基础设置
+# 1. Keybindings & Interaction Mode
 # ------------------------------------------------------------------------------
-auto_key=Ctrl+Shift+s
-gui_key=Ctrl+Shift+a
+# Main shortcut key (default: Ctrl+Shift+s)
+shortcut_key=Ctrl+Shift+s
+
+# Action for main shortcut (gui or auto)
+#   gui  = Opens visual window to choose and download subtitle (Recommended)
+#   auto = Directly searches and loads the best-matching subtitle automatically
+default_mode=gui
+
+# Direct dedicated shortcuts (optional)
+# gui_key=Ctrl+Shift+a
+# auto_key=Ctrl+Shift+d
+
+# Duration (in seconds) for OSD notifications
+notify_duration=3
+
+# Python executable path (default: python)
 python_path=python
 
 # ------------------------------------------------------------------------------
-# 字幕下载与解压位置
+# 2. Subtitle Download & Extraction Settings
 # ------------------------------------------------------------------------------
-# 留空 = 保存到视频所在同级文件夹
-# 集中保存示例: extract_dir=C:/Users/Barba/AppData/Roaming/mpv.net/subtitles
-# 视频子目录示例: extract_dir={video_dir}/subs
+# Directory where downloaded subtitles are extracted.
+# Leave empty to extract into the same directory as the playing video file.
+# Examples:
+#   extract_dir=C:/Users/Username/Subtitles
+#   extract_dir={video_dir}/subs
 extract_dir=
 
-# 自动重命名为视频同名 (yes/no)
+# Automatically rename extracted subtitle to match video name (yes/no)
 rename_to_video=yes
 
-# 字幕格式优选顺序
-prefer_format=ass,srt,ssa,vtt
+# Preferred subtitle formats in priority order (comma-separated, srt first)
+prefer_format=srt,ass,ssa,vtt
+
+# Preferred subtitle languages (comma-separated)
+prefer_language=chs,cht,eng
 
 # ------------------------------------------------------------------------------
-# SubHD (主域名 + 备用域名)
+# 3. SubHD Provider Settings
 # ------------------------------------------------------------------------------
 subhd_enabled=yes
 subhd_base_url=https://subhd.tv
@@ -130,70 +139,63 @@ subhd_fallback_urls=https://subhd.me,https://subhd.one
 subhd_timeout=5
 
 # ------------------------------------------------------------------------------
-# Zimuku 字幕库 (主域名 + 备用域名)
+# 4. Zimuku Provider Settings
 # ------------------------------------------------------------------------------
 zimuku_enabled=yes
 zimuku_base_url=https://srtku.com
 zimuku_fallback_urls=https://zmk.pw,https://zimuku.org
 zimuku_timeout=5
 
-# 全局网络超时 (秒)
+# ------------------------------------------------------------------------------
+# 5. Global Timeout (seconds)
+# ------------------------------------------------------------------------------
 timeout=10
 ```
 
-*(同时也兼容 `config.json` 格式)*。
-
 ---
 
-## 🚀 Standalone CLI Usage
+## 🖥️ Standalone CLI Usage
 
-也可以在终端直接使用命令行运行 `main.py`：
+The script can also be executed directly from terminal / command line:
 
 ```bash
-# 自动为视频搜索并下载最佳字幕
-python main.py auto "Oppenheimer.2023.1080p.BluRay.mkv"
+# Auto-download best matching subtitle for a video:
+python main.py auto "C:/Videos/Silo.S03E08.mkv"
 
-# 打开可视化图形界面
-python main.py gui --video "Severance.S01E01.1080p.mkv"
+# Open visual GUI search picker for a video:
+python main.py gui "C:/Videos/Oppenheimer.2023.mkv"
 
-# 在终端列出搜索结果
-python main.py search "奥本海默 2023"
+# Search subtitles in terminal:
+python main.py search "Oppenheimer"
 ```
 
 ---
 
-## 📁 Project Structure
+## 🧪 Testing
 
-```
-mpv-zhsubtitle/
-├── zhsubtitle.example.conf       # MPV script-opts 配置文件模板
-├── config.example.json           # JSON 格式配置模板
-├── requirements.txt              # Python 依赖
-├── main.py                       # Python CLI 入口
-├── main.lua                      # MPV 插件包入口
-├── zhsubtitle/
-│   ├── __init__.py
-│   ├── config.py                 # 支持 .conf 和 .json 的配置解析器
-│   ├── guess.py                  # GuessIt 元数据提取
-│   ├── extractor.py              # 字幕解压、编码修复与单集提取
-│   ├── logger.py                 # 日志记录模块
-│   ├── models.py                 # 数据模型 (SubtitleItem, VideoMeta 等)
-│   ├── providers/
-│   │   ├── base.py               # 抽象基类
-│   │   ├── subhd.py              # SubHD 接口 (多域名 + Token 下载)
-│   │   └── zimuku.py             # Zimuku 接口 (多域名 + 验证码自动识别)
-│   ├── service.py                # 多线程并发搜索与打分引擎
-│   ├── gui.py                    # Tkinter 现代化暗黑搜索 GUI 界面
-│   └── cli.py                    # 命令行逻辑
-├── scripts/
-│   └── zhsubtitle.lua            # MPV Lua 脚本 (快捷键与异步进程调度)
-├── tests/
-│   └── test_all.py               # 单元测试
-└── README.md
+Run the automated test suite with:
+
+```bash
+python -m unittest discover tests
 ```
 
 ---
 
-## 📜 License
+## 🙏 Acknowledgements
 
-MIT License. Subtitles are for educational and personal research use only.
+We would like to express our deepest gratitude to:
+- **[service.subtitles.chinesesubtitles](https://github.com/qzydustin/service.subtitles.chinesesubtitles)** (by `qzydustin`) and **[subtitle-finder](https://github.com/moonlin1213/subtitle-finder)** (by `moonlin1213`) for providing foundational research, architecture patterns, and provider API insights.
+- **All subtitle creators, translators, fansub groups, and community archivers** whose continuous dedication and passion make high-quality subtitles accessible to movie and TV enthusiasts worldwide.
+
+---
+
+## 🤖 AI Disclosure
+
+This project was developed, designed, and pair-programmed with the assistance of **Google Gemini 3.7 Flash** (via Google Antigravity).
+
+---
+
+## 📄 License
+
+MIT License. See [LICENSE](LICENSE) for details.
+
