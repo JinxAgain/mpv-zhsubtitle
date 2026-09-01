@@ -14,14 +14,23 @@ from ..models import SubtitleItem, SubtitleTags, VideoMeta
 SOURCE_MAP = {
     "官方字幕": "official",
     "官方": "official",
+    "官译": "official",
     "转载精修": "reprint",
     "精修": "reprint",
+    "转载": "reprint",
     "原创翻译": "original",
     "原创": "original",
+    "自翻": "original",
+    "AI校对": "ai",
+    "AI润色": "ai",
     "AI翻润色": "ai",
     "AI翻译": "ai",
+    "AI": "ai",
     "机器翻译": "machine",
-    "机翻": "machine"
+    "机翻": "machine",
+    "其他来源": "other",
+    "其他": "other",
+    "听译": "hearing"
 }
 
 
@@ -98,7 +107,7 @@ class SubhdProvider(BaseProvider):
             else:
                 title = view_text or head_text or f"SubHD Subtitle {sid}"
 
-            tags = self._parse_tags_from_element(block)
+            tags, dl_count = self._parse_tags_from_element(block)
             page_url = f"{self.base_url}/a/{sid}"
 
             item = SubtitleItem(
@@ -106,34 +115,38 @@ class SubhdProvider(BaseProvider):
                 title=title,
                 page_url=page_url,
                 provider=self.name,
-                tags=tags
+                tags=tags,
+                downloads_count=dl_count
             )
             items.append(item)
 
         return items
 
-    def _parse_tags_from_element(self, element) -> SubtitleTags:
+    def _parse_tags_from_element(self, element) -> Tuple[SubtitleTags, int]:
         """Extract metadata tags from badges and text spans."""
         tags = SubtitleTags(provider=self.name)
+        dl_count = 0
         spans = element.find_all("span")
 
         for span in spans:
             text = span.get_text(strip=True)
-            classes = span.get("class", [])
+            if not text:
+                continue
 
-            # Source badges
-            for cn, key in SOURCE_MAP.items():
-                if cn in text and key not in tags.source:
-                    tags.source.append(key)
+            # Source badges (AI校对, 其他来源, 官方字幕, etc.)
+            for cn in SOURCE_MAP.keys():
+                if cn in text and cn not in tags.source:
+                    tags.source.append(cn)
+                    break
 
             # Language badges
-            if "简体" in text and "chs" not in tags.lang:
+            if ("简体" in text or "简中" in text) and "chs" not in tags.lang:
                 tags.lang.append("chs")
-            if "繁体" in text and "cht" not in tags.lang:
+            if ("繁体" in text or "繁中" in text) and "cht" not in tags.lang:
                 tags.lang.append("cht")
-            if "英语" in text and "eng" not in tags.lang:
+            if ("英语" in text or "英文" in text) and "eng" not in tags.lang:
                 tags.lang.append("eng")
-            if "双语" in text:
+            if "双语" in text or "中英" in text:
                 tags.bilingual = True
 
             # Formats
@@ -141,11 +154,28 @@ class SubhdProvider(BaseProvider):
                 if fmt.upper() in text.upper() and fmt not in tags.fmt:
                     tags.fmt.append(fmt)
 
-        fansub_el = element.select_one('a[href^="/zu/"]') or element.select_one('a[href^="/u/"]')
-        if fansub_el:
-            tags.fansub = fansub_el.get_text(strip=True)
+            # Download count numbers (e.g. 105, 312, 1357)
+            if span.find("i", class_=lambda c: c and ("download" in c or "cloud" in c)):
+                try:
+                    num_match = re.search(r"(\d+)", text)
+                    if num_match:
+                        dl_count = int(num_match.group(1))
+                except Exception:
+                    pass
 
-        return tags
+        # If language is still empty, default to chs
+        if not tags.lang:
+            tags.lang.append("chs")
+
+        zu_el = element.select_one('a[href^="/zu/"]')
+        if zu_el:
+            tags.fansub = zu_el.get_text(strip=True)
+
+        u_el = element.select_one('a[href^="/u/"]')
+        if u_el:
+            tags.uploader = u_el.get_text(strip=True)
+
+        return tags, dl_count
 
     def download(self, item: SubtitleItem) -> Tuple[Optional[bytes], str]:
         """Download subtitle file from SubHD using the prepare-download -> down API token flow."""

@@ -54,6 +54,9 @@ def auto_download(video_path: str, custom_query: Optional[str] = None) -> int:
         print(f"[zhsubtitle] Trying candidate #{rank}: [{item.provider.upper()}] {item.title} (Score: {int(item.score)})", file=sys.stderr)
         res = service.download_and_extract(item, video_path=video_path, meta=meta)
         if res.success and res.saved_path:
+            for extra_path in res.all_saved_paths:
+                if extra_path != res.saved_path:
+                    print(f"[SUBTITLE_EXTRACTED]{extra_path}")
             print(f"[SUBTITLE_LOADED]{res.saved_path}")
             sys.stdout.flush()
             return 0

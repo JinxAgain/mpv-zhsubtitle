@@ -138,30 +138,69 @@ class VideoMeta:
 @dataclass
 class SubtitleTags:
     """Metadata tags for a subtitle entry."""
-    lang: List[str] = field(default_factory=list)  # 'chs', 'cht', 'eng', etc.
-    fmt: List[str] = field(default_factory=list)   # 'ass', 'srt', 'ssa', 'vtt', 'sub'
-    source: List[str] = field(default_factory=list) # 'official', 'reprint', 'original', 'ai', 'machine'
+    lang: List[str] = field(default_factory=list)   # 'chs', 'cht', 'eng', etc.
+    fmt: List[str] = field(default_factory=list)    # 'ass', 'srt', 'ssa', 'vtt', 'sub'
+    source: List[str] = field(default_factory=list) # 'official', 'ai', 'original', 'reprint', 'other', 'machine'
     bilingual: bool = False
     collection: bool = False
     fansub: str = ""
+    uploader: str = ""
     provider: str = ""
+
+    def display_uploader_or_group(self) -> str:
+        """Return uploader username if available, else fansub group, filtering placeholder values."""
+        if self.uploader:
+            return self.uploader
+        if self.fansub and self.fansub not in ("见字幕文件", "见片头", "见压缩包", "-"):
+            return self.fansub
+        return "-"
+
+    def display_lang(self) -> str:
+        """Format language string for GUI display with bilingual clarity."""
+        if self.bilingual:
+            if "cht" in self.lang and "chs" in self.lang:
+                return "简繁/双语"
+            elif "cht" in self.lang:
+                return "繁英双语"
+            else:
+                return "中英双语"
+
+        if "chs" in self.lang and "cht" in self.lang:
+            return "简/繁"
+        elif "cht" in self.lang:
+            return "繁体"
+        elif "chs" in self.lang:
+            return "简体"
+        elif "eng" in self.lang:
+            return "英文"
+        elif self.lang:
+            return "/".join(l.upper() for l in self.lang)
+        return "简体"
+
+    def display_type(self) -> str:
+        """Format subtitle type/source for GUI display preserving original text."""
+        if not self.source:
+            return "-"
+        return "/".join(self.source)
 
     def summary_label(self) -> str:
         """Construct a formatted tag string for display in GUI or CLI."""
         parts = []
-        lang_str = "/".join(self.lang).upper() if self.lang else "UNKNOWN"
-        if self.bilingual and "BILINGUAL" not in lang_str:
+        lang_str = "/".join(self.lang).upper() if self.lang else "CHS"
+        if self.bilingual and "DUAL" not in lang_str:
             lang_str += " (Dual)"
         parts.append(f"[{lang_str}]")
 
         if self.fmt:
             parts.append(f"[{'/'.join(f.upper() for f in self.fmt)}]")
 
-        if self.source:
-            parts.append(f"[{'/'.join(self.source).capitalize()}]")
+        type_str = self.display_type()
+        if type_str and type_str != "-":
+            parts.append(f"[{type_str}]")
 
-        if self.fansub:
-            parts.append(f"[{self.fansub}]")
+        uploader_group = self.display_uploader_or_group()
+        if uploader_group and uploader_group != "-":
+            parts.append(f"[{uploader_group}]")
 
         if self.collection:
             parts.append("[Pack]")
@@ -179,6 +218,7 @@ class SubtitleItem:
     tags: SubtitleTags = field(default_factory=SubtitleTags)
     download_url: Optional[str] = None
     rate: float = 0.0
+    rate_stars: str = ""
     downloads_count: int = 0
     score: float = 0.0
 
@@ -187,11 +227,20 @@ class SubtitleItem:
         tag_str = self.tags.summary_label()
         return f"{tag_str} {self.title}".strip()
 
+    @property
+    def display_rating(self) -> str:
+        if self.rate_stars:
+            return self.rate_stars
+        if self.rate > 0:
+            return f"{self.rate:.1f}★"
+        return "-"
+
 
 @dataclass
 class DownloadResult:
     """Result of subtitle download and extraction."""
     success: bool = False
     saved_path: str = ""
+    all_saved_paths: List[str] = field(default_factory=list)
     extracted_files: List[str] = field(default_factory=list)
     error_msg: str = ""

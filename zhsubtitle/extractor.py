@@ -39,16 +39,41 @@ def pick_best_subtitle_file(
 ) -> Optional[str]:
     """
     Select the most suitable subtitle file from a list of extracted files.
-    Ranks by episode match, format preference (.ass > .srt), and language preference.
+    Ranks by:
+    1. Target episode match (+1000)
+    2. Language priority: Bilingual (+500) > Simplified Chinese (+300) > Traditional Chinese (+280) > English (+50)
+    3. User format preference (.srt, .ass, etc.)
     """
     if not filenames:
         return None
 
-    prefer_format = [f.lower() for f in (prefer_format or ["ass", "srt", "ssa", "vtt"])]
-    prefer_language = [l.lower() for l in (prefer_language or ["chs", "cht", "eng"])]
+    prefer_format = [f.lower() for f in (prefer_format or ["srt", "ass", "ssa", "vtt"])]
+
+    # Bilingual patterns (e.g. zh-en, chs.eng, 简英, 繁英, 双语, chs&eng)
+    bilingual_pat = re.compile(
+        r'双语|简英|繁英|中英|chs[&+._ -]?eng|cht[&+._ -]?eng|zh[&+._ -]?en|chi[&+._ -]?eng|zho[&+._ -]?eng|en[&+._ -]?zh',
+        re.IGNORECASE
+    )
+
+    # Simplified Chinese patterns
+    chs_pat = re.compile(
+        r'chs|gb|sc|简|简体|简中|zh-cn|zh-hans|zh-sg|chi|zho|\bzh\b|\bcn\b',
+        re.IGNORECASE
+    )
+
+    # Traditional Chinese patterns
+    cht_pat = re.compile(
+        r'cht|tc|big5|繁|繁体|繁體|繁中|zh-tw|zh-hk|zh-hant|hk|tw',
+        re.IGNORECASE
+    )
+
+    # English-only patterns
+    eng_pat = re.compile(r'eng|en|英文|英语', re.IGNORECASE)
 
     def score_file(name: str) -> Tuple[int, int, int]:
         lower = name.lower()
+
+        # 1. Episode score
         ep_score = 0
         if episode is not None:
             ep_patterns = [
@@ -59,23 +84,25 @@ def pick_best_subtitle_file(
             ]
             for pat in ep_patterns:
                 if re.search(pat, lower):
-                    ep_score = 100
+                    ep_score = 1000
                     break
 
-        # Format score
+        # 2. Language score (Bilingual > CHS > CHT > ENG)
+        lang_score = 0
+        if bilingual_pat.search(lower):
+            lang_score = 500
+        elif chs_pat.search(lower):
+            lang_score = 300
+        elif cht_pat.search(lower):
+            lang_score = 280
+        elif eng_pat.search(lower):
+            lang_score = 50
+
+        # 3. Format score
         fmt_score = 0
         ext = os.path.splitext(lower)[1].lstrip(".")
         if ext in prefer_format:
-            fmt_score = len(prefer_format) - prefer_format.index(ext)
-
-        # Language score
-        lang_score = 0
-        if "chs" in lower or "sc" in lower or "gb" in lower or "简体" in lower or "简中" in lower:
-            lang_score = 10
-        elif "cht" in lower or "tc" in lower or "big5" in lower or "繁体" in lower or "繁中" in lower:
-            lang_score = 8
-        elif "eng" in lower or "en" in lower or "英文" in lower or "英语" in lower:
-            lang_score = 5
+            fmt_score = (len(prefer_format) - prefer_format.index(ext)) * 10
 
         return (ep_score, lang_score, fmt_score)
 
@@ -168,7 +195,7 @@ def _extract_from_zip(
     prefer_format: Optional[List[str]],
     prefer_language: Optional[List[str]]
 ) -> DownloadResult:
-    """Extract subtitles from ZIP bytes in-memory."""
+    """Extract all subtitles from ZIP bytes in-memory and return primary and secondary files."""
     try:
         with zipfile.ZipFile(io.BytesIO(content_bytes)) as zf:
             extracted_map = {}
@@ -194,31 +221,37 @@ def _extract_from_zip(
                 episode=episode,
                 prefer_format=prefer_format,
                 prefer_language=prefer_language
-            )
+            ) or sub_names[0]
 
-            if not best_sub:
-                best_sub = sub_names[0]
+            # Save ALL subtitle files to target_dir
+            used_names = set()
+            saved_paths_map = {}
+            for sub_name in sub_names:
+                out_name = _determine_final_name(sub_name, video_path, rename_to_video, used_names)
+                used_names.add(out_name)
+                out_path = os.path.join(target_dir, out_name)
+                with open(out_path, "wb") as f:
+                    f.write(extracted_map[sub_name])
+                saved_paths_map[sub_name] = out_path
 
-            # Save the chosen subtitle
-            final_name = _determine_final_name(best_sub, video_path, rename_to_video)
-            final_path = os.path.join(target_dir, final_name)
-            with open(final_path, "wb") as f:
-                f.write(extracted_map[best_sub])
+                # If it's a .sub file and a matching .idx exists, extract .idx too
+                if sub_name.lower().endswith(".sub"):
+                    idx_base = os.path.splitext(sub_name)[0] + ".idx"
+                    for k in extracted_map:
+                        if k.lower() == idx_base.lower():
+                            idx_final = os.path.splitext(out_path)[0] + ".idx"
+                            with open(idx_final, "wb") as f:
+                                f.write(extracted_map[k])
+                            break
 
-            # If it's a .sub file and a matching .idx exists, extract .idx too
-            if best_sub.lower().endswith(".sub"):
-                idx_base = os.path.splitext(best_sub)[0] + ".idx"
-                for k in extracted_map:
-                    if k.lower() == idx_base.lower():
-                        idx_final = os.path.splitext(final_path)[0] + ".idx"
-                        with open(idx_final, "wb") as f:
-                            f.write(extracted_map[k])
-                        break
+            primary_path = saved_paths_map.get(best_sub, list(saved_paths_map.values())[0])
+            all_paths = list(saved_paths_map.values())
 
             return DownloadResult(
                 success=True,
-                saved_path=final_path,
-                extracted_files=[final_path]
+                saved_path=primary_path,
+                all_saved_paths=all_paths,
+                extracted_files=all_paths
             )
 
     except Exception as e:
@@ -256,7 +289,7 @@ def _extract_generic_archive(
                     found_subs.append(os.path.join(root, file))
 
         if not found_subs:
-            return DownloadResult(success=False, error_msg=f"Unsupported archive or no subtitles found in {original_filename}")
+            return DownloadResult(success=False, error_msg="No subtitle files found inside extracted archive")
 
         # Pick best subtitle
         sub_basenames = [os.path.basename(p) for p in found_subs]
@@ -267,39 +300,75 @@ def _extract_generic_archive(
             prefer_language=prefer_language
         ) or sub_basenames[0]
 
-        best_src_path = next(p for p in found_subs if os.path.basename(p) == best_base)
-        final_name = _determine_final_name(best_base, video_path, rename_to_video)
-        final_path = os.path.join(target_dir, final_name)
+        used_names = set()
+        saved_paths_map = {}
+        for src_path in found_subs:
+            bname = os.path.basename(src_path)
+            out_name = _determine_final_name(bname, video_path, rename_to_video, used_names)
+            used_names.add(out_name)
+            out_path = os.path.join(target_dir, out_name)
+            shutil.copyfile(src_path, out_path)
+            saved_paths_map[bname] = out_path
 
-        shutil.copyfile(best_src_path, final_path)
+        primary_path = saved_paths_map.get(best_base, list(saved_paths_map.values())[0])
+        all_paths = list(saved_paths_map.values())
+
         return DownloadResult(
             success=True,
-            saved_path=final_path,
-            extracted_files=[final_path]
+            saved_path=primary_path,
+            all_saved_paths=all_paths,
+            extracted_files=all_paths
         )
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _determine_final_name(subtitle_filename: str, video_path: Optional[str], rename_to_video: bool) -> str:
-    """Determine the final saved filename for the subtitle."""
+def _determine_final_name(
+    subtitle_filename: str,
+    video_path: Optional[str],
+    rename_to_video: bool,
+    used_names: Optional[set] = None
+) -> str:
+    """Determine the final saved filename for the subtitle with language differentiation."""
     ext = os.path.splitext(subtitle_filename)[1].lower()
+    used = used_names or set()
 
     if rename_to_video and video_path:
         video_base = os.path.splitext(os.path.basename(video_path))[0]
-        # Detect if subtitle has language indicators
         lower_sub = subtitle_filename.lower()
-        lang_suffix = ""
-        if "chs" in lower_sub or "简" in lower_sub:
-            lang_suffix = ".zh-CN"
-        elif "cht" in lower_sub or "繁" in lower_sub:
-            lang_suffix = ".zh-TW"
-        elif "eng" in lower_sub or "en" in lower_sub:
+
+        # Check bilingual first
+        bilingual_match = re.search(r'双语|简英|繁英|中英|zh[-_.]?en|chs[&+._ -]?eng|cht[&+._ -]?eng', lower_sub)
+        if bilingual_match:
+            lang_suffix = ".zh-en"
+        elif any(k in lower_sub for k in ("chs", "简", "sc", "gb", "zh-cn", "zh-hans")):
+            lang_suffix = ".zh-cn"
+        elif any(k in lower_sub for k in ("cht", "繁", "tc", "big5", "zh-tw", "zh-hk")):
+            lang_suffix = ".zh-tw"
+        elif any(k in lower_sub for k in ("eng", "en", "英文")):
             lang_suffix = ".en"
-        elif "双语" in lower_sub or "dual" in lower_sub:
-            lang_suffix = ".zh-CN&en"
+        elif "zh" in lower_sub or "cn" in lower_sub:
+            lang_suffix = ".zh"
+        else:
+            lang_suffix = ""
 
-        return f"{video_base}{lang_suffix}{ext}"
+        candidate = f"{video_base}{lang_suffix}{ext}" if lang_suffix else f"{video_base}{ext}"
+        if candidate not in used:
+            return candidate
 
-    return sanitize_filename(subtitle_filename)
+        # Disambiguate collision (e.g. two .zh-en.srt files)
+        counter = 2
+        while f"{video_base}{lang_suffix}.{counter}{ext}" in used:
+            counter += 1
+        return f"{video_base}{lang_suffix}.{counter}{ext}"
+
+    candidate = sanitize_filename(subtitle_filename)
+    if candidate not in used:
+        return candidate
+
+    name_root, name_ext = os.path.splitext(candidate)
+    counter = 2
+    while f"{name_root}.{counter}{name_ext}" in used:
+        counter += 1
+    return f"{name_root}.{counter}{name_ext}"

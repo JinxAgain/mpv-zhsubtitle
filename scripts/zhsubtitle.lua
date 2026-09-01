@@ -138,11 +138,19 @@ local function run_sub_downloader(mode)
         local stdout = res.stdout or ""
         local loaded_path = stdout:match("%[SUBTITLE_LOADED%]([^\r\n]+)")
 
+        -- Add any additional extracted subtitles as selectable tracks
+        for extracted_path in stdout:gmatch("%[SUBTITLE_EXTRACTED%]([^\r\n]+)") do
+            if extracted_path ~= loaded_path then
+                mp.commandv("sub-add", extracted_path, "auto")
+                mp.msg.info("Added secondary subtitle track: " .. extracted_path)
+            end
+        end
+
         if loaded_path and loaded_path ~= "" then
             mp.commandv("sub-add", loaded_path, "select")
             local _, sub_name = utils.split_path(loaded_path)
             mp.osd_message("[zhsubtitle] Subtitle Loaded: " .. (sub_name or loaded_path), 4)
-            mp.msg.info("Loaded subtitle: " .. loaded_path)
+            mp.msg.info("Loaded primary subtitle: " .. loaded_path)
         elseif mode == "auto" then
             mp.osd_message("[zhsubtitle] No subtitles found", 3)
         end

@@ -1,11 +1,17 @@
 """Interactive Tkinter GUI for subtitle search, quick keyword switching, and selection."""
 
 import os
+import re
 import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+import urllib.parse
+import webbrowser
+
+from bs4 import BeautifulSoup
+import requests
 
 from .config import Config, load_config
 from .guess import parse_video
@@ -14,8 +20,120 @@ from .models import SubtitleItem, VideoMeta
 from .service import SubtitleService
 
 
+class TreeviewTooltip:
+    """Floating tooltip for Treeview rows displaying full subtitle release names and metadata."""
+
+    def __init__(self, root: tk.Tk, tree: ttk.Treeview, get_item_fn):
+        self.root = root
+        self.tree = tree
+        self.get_item_fn = get_item_fn
+        self.tip_window: Optional[tk.Toplevel] = None
+        self.current_iid: Optional[str] = None
+        self.scheduled_id: Optional[str] = None
+
+        self.tree.bind("<Motion>", self._on_motion)
+        self.tree.bind("<Leave>", self._on_leave)
+        self.tree.bind("<ButtonPress>", self._on_leave)
+
+    def _on_motion(self, event) -> None:
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            self._hide()
+            self.current_iid = None
+            return
+
+        if iid != self.current_iid:
+            self.current_iid = iid
+            self._hide()
+            if self.scheduled_id:
+                self.tree.after_cancel(self.scheduled_id)
+            self.scheduled_id = self.tree.after(250, lambda: self._show(event.x_root, event.y_root, iid))
+
+    def _show(self, x: int, y: int, iid: str) -> None:
+        item: Optional[SubtitleItem] = self.get_item_fn(iid)
+        if not item or self.tip_window:
+            return
+
+        self.tip_window = tk.Toplevel(self.root)
+        self.tip_window.wm_overrideredirect(True)
+
+        # Ensure tooltip stays on top of topmost main window
+        try:
+            self.tip_window.wm_attributes("-topmost", True)
+            self.tip_window.attributes("-topmost", True)
+            self.tip_window.lift()
+        except Exception:
+            pass
+
+        frame = tk.Frame(self.tip_window, bg="#11111b", bd=1, relief=tk.SOLID)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Full Title / Release
+        title_lbl = tk.Label(
+            frame,
+            text=item.title,
+            bg="#11111b",
+            fg="#89b4fa",
+            font=("Segoe UI", 9, "bold"),
+            wraplength=540,
+            justify=tk.LEFT,
+            padx=8,
+            pady=4
+        )
+        title_lbl.pack(anchor=tk.W)
+
+        # Metadata rows
+        uploader_disp = item.tags.display_uploader_or_group()
+        info_lines = [
+            f"Source: {item.provider.upper()} (ID: {item.id})",
+            f"Language: {item.tags.display_lang()}  |  Format: {'/'.join(f.upper() for f in item.tags.fmt) or '-'}",
+            f"Type: {item.tags.display_type()}  |  Uploader / Group: {uploader_disp}"
+        ]
+        if item.tags.fansub and item.tags.fansub != uploader_disp and item.tags.fansub not in ("见字幕文件", "见片头", "见压缩包", "-"):
+            info_lines.append(f"Fansub / Studio: {item.tags.fansub}")
+
+        if item.rate_stars or item.rate > 0:
+            info_lines.append(f"Rating: {item.display_rating}  |  Downloads: {item.downloads_count}")
+        elif item.downloads_count > 0:
+            info_lines.append(f"Downloads: {item.downloads_count}")
+
+        info_lbl = tk.Label(
+            frame,
+            text="\n".join(info_lines),
+            bg="#11111b",
+            fg="#cdd6f4",
+            font=("Segoe UI", 8),
+            justify=tk.LEFT,
+            padx=8,
+            pady=4
+        )
+        info_lbl.pack(anchor=tk.W)
+
+        self.tip_window.update_idletasks()
+        w = self.tip_window.winfo_width()
+        h = self.tip_window.winfo_height()
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+
+        pos_x = min(x + 16, screen_w - w - 10)
+        pos_y = min(y + 18, screen_h - h - 10)
+        self.tip_window.wm_geometry(f"+{pos_x}+{pos_y}")
+
+    def _on_leave(self, event=None) -> None:
+        self._hide()
+        self.current_iid = None
+        if self.scheduled_id:
+            self.tree.after_cancel(self.scheduled_id)
+            self.scheduled_id = None
+
+    def _hide(self) -> None:
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
 class SubtitlePickerGui:
-    """Tkinter-based subtitle search and download GUI window with Douban ID and Quick Search Chips."""
+    """Tkinter-based subtitle search and download GUI window with Douban ID, Quick Chips, Context Menu, and Column Sorting."""
 
     def __init__(
         self,
@@ -31,12 +149,15 @@ class SubtitlePickerGui:
         self.initial_query = initial_query
         self.results: List[SubtitleItem] = []
         self.selected_path: Optional[str] = None
+        self.sort_column_state = {"col": "score", "reverse": True}
 
         logger.info(f"[GUI] Initialized with video='{video_path}', custom_query='{initial_query}'")
 
         self._init_window()
         self._init_styles()
         self._create_widgets()
+        self._init_context_menu()
+        self._init_tooltip()
 
         # Start initial resolution / search
         self.root.after(100, self.start_initial_load)
@@ -45,8 +166,8 @@ class SubtitlePickerGui:
         """Initialize main window properties."""
         self.root = tk.Tk()
         self.root.title("MPV Chinese Subtitle Downloader (SubHD & Zimuku)")
-        self.root.geometry("920x580")
-        self.root.minsize(760, 460)
+        self.root.geometry("1060x620")
+        self.root.minsize(880, 480)
 
         # Make window stay on top of MPV
         try:
@@ -176,22 +297,23 @@ class SubtitlePickerGui:
         table_frame = ttk.Frame(main_container)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ("provider", "format", "source", "fansub", "title", "score")
+        self.columns_meta = {
+            "provider": ("Source", 65, tk.CENTER, False),
+            "lang": ("Lang", 75, tk.CENTER, False),
+            "format": ("Format", 60, tk.CENTER, False),
+            "type": ("Type", 75, tk.CENTER, False),
+            "fansub": ("Uploader / Group", 120, tk.W, False),
+            "title": ("Subtitle Name / Release", 420, tk.W, True),
+            "rating": ("Rating", 105, tk.CENTER, False),
+            "score": ("Match", 55, tk.CENTER, False)
+        }
+
+        columns = tuple(self.columns_meta.keys())
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
 
-        self.tree.heading("provider", text="Source")
-        self.tree.heading("format", text="Format")
-        self.tree.heading("source", text="Type")
-        self.tree.heading("fansub", text="Fansub / Group")
-        self.tree.heading("title", text="Subtitle Name / Release")
-        self.tree.heading("score", text="Match")
-
-        self.tree.column("provider", width=80, anchor=tk.CENTER, stretch=False)
-        self.tree.column("format", width=70, anchor=tk.CENTER, stretch=False)
-        self.tree.column("source", width=80, anchor=tk.CENTER, stretch=False)
-        self.tree.column("fansub", width=120, anchor=tk.W, stretch=False)
-        self.tree.column("title", width=460, anchor=tk.W, stretch=True)
-        self.tree.column("score", width=60, anchor=tk.CENTER, stretch=False)
+        for col, (header_label, col_w, col_anchor, is_stretch) in self.columns_meta.items():
+            self.tree.heading(col, text=header_label, command=lambda c=col: self._sort_by_column(c))
+            self.tree.column(col, width=col_w, anchor=col_anchor, stretch=is_stretch)
 
         # Scrollbars
         v_scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -237,6 +359,244 @@ class SubtitlePickerGui:
             cursor="hand2"
         )
         cancel_btn.pack(side=tk.RIGHT)
+
+    def _init_context_menu(self) -> None:
+        """Create right-click context menu for table rows."""
+        self.context_menu = tk.Menu(self.root, tearoff=0, bg="#252538", fg="#cdd6f4", activebackground="#45475a", activeforeground="#ffffff")
+        self.context_menu.add_command(label="🔍 View Details", command=self.on_view_details)
+        self.context_menu.add_command(label="🌐 Open in Browser", command=self.on_open_browser)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="⬇️ Download & Load Subtitle", command=self.on_download_selected)
+
+        self.tree.bind("<Button-3>", self._show_context_menu)
+        self.tree.bind("<Button-2>", self._show_context_menu)
+
+    def _show_context_menu(self, event) -> None:
+        """Display right-click context menu on row under cursor."""
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+            try:
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.context_menu.grab_release()
+
+    def _init_tooltip(self) -> None:
+        """Attach hover tooltip to Treeview."""
+        self.tooltip = TreeviewTooltip(self.root, self.tree, self._get_item_by_iid)
+
+    def _get_item_by_iid(self, iid: str) -> Optional[SubtitleItem]:
+        try:
+            idx = int(iid)
+            if 0 <= idx < len(self.results):
+                return self.results[idx]
+        except Exception:
+            pass
+        return None
+
+    def _sort_by_column(self, col: str) -> None:
+        """Sort search results when a column header is clicked."""
+        if not self.results:
+            return
+
+        current_col = self.sort_column_state.get("col")
+        current_rev = self.sort_column_state.get("reverse", False)
+
+        new_rev = not current_rev if current_col == col else (col in ("score", "rating"))
+        self.sort_column_state = {"col": col, "reverse": new_rev}
+
+        def _sort_key(item: SubtitleItem):
+            if col == "provider":
+                return item.provider.lower()
+            elif col == "lang":
+                return item.tags.display_lang()
+            elif col == "format":
+                return "/".join(item.tags.fmt)
+            elif col == "type":
+                return item.tags.display_type()
+            elif col == "fansub":
+                return item.tags.display_uploader_or_group().lower()
+            elif col == "title":
+                return item.title.lower()
+            elif col == "rating":
+                return item.rate
+            elif col == "score":
+                return item.score
+            return 0
+
+        self.results.sort(key=_sort_key, reverse=new_rev)
+
+        # Update headings with sort indicator
+        for c, (orig_name, _, _, _) in self.columns_meta.items():
+            if c == col:
+                indicator = " ▼" if new_rev else " ▲"
+                self.tree.heading(c, text=f"{orig_name}{indicator}")
+            else:
+                self.tree.heading(c, text=orig_name)
+
+        self._render_tree_rows()
+
+    def on_view_details(self) -> None:
+        """Open a dedicated modal dialog showing detailed subtitle metadata and async remarks."""
+        selected = self.tree.selection()
+        if not selected:
+            return
+        item = self._get_item_by_iid(selected[0])
+        if not item:
+            return
+
+        detail_win = tk.Toplevel(self.root)
+        detail_win.title(f"Subtitle Details - [{item.provider.upper()}] {item.id}")
+        detail_win.geometry("680x480")
+        detail_win.minsize(560, 380)
+        detail_win.configure(bg=self.bg_color)
+        detail_win.transient(self.root)
+
+        try:
+            detail_win.wm_attributes("-topmost", True)
+            detail_win.attributes("-topmost", True)
+            detail_win.lift()
+        except Exception:
+            pass
+
+        # Center detail dialog relative to main window
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 340
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 240
+        detail_win.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+        container = ttk.Frame(detail_win, padding=16)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        # Header Title
+        title_box = tk.Text(container, wrap=tk.WORD, height=2, bg="#181825", fg="#89b4fa", font=("Segoe UI", 10, "bold"), bd=1, relief=tk.SOLID)
+        title_box.insert("1.0", item.title)
+        title_box.config(state=tk.DISABLED)
+        title_box.pack(fill=tk.X, pady=(0, 10))
+
+        # Details Grid
+        grid_frame = ttk.Frame(container)
+        grid_frame.pack(fill=tk.X, pady=(0, 10))
+
+        details = [
+            ("Source Provider:", f"{item.provider.upper()}"),
+            ("Subtitle ID:", f"{item.id}"),
+            ("Language:", f"{item.tags.display_lang()}"),
+            ("Format:", f"{'/'.join(f.upper() for f in item.tags.fmt) or '-'}"),
+            ("Type / Source:", f"{item.tags.display_type()}"),
+            ("Uploader:", f"{item.tags.uploader or '-'}"),
+            ("Fansub / Studio:", f"{item.tags.fansub or '-'}"),
+            ("Rating Stars:", f"{item.display_rating}"),
+            ("Downloads Count:", f"{item.downloads_count or '-'}"),
+            ("Match Score:", f"{int(item.score)}")
+        ]
+
+        # 2-column layout for metadata
+        for idx, (label, val) in enumerate(details):
+            r = idx // 2
+            c = (idx % 2) * 2
+            lbl = ttk.Label(grid_frame, text=label, font=("Segoe UI", 9, "bold"), foreground=self.subtext_color)
+            lbl.grid(row=r, column=c, sticky=tk.W, pady=2, padx=(0, 6))
+
+            val_lbl = ttk.Label(grid_frame, text=val, font=("Segoe UI", 9), foreground=self.fg_color)
+            val_lbl.grid(row=r, column=c + 1, sticky=tk.W, pady=2, padx=(0, 16))
+
+        # Asynchronous Description / Remarks Text Area
+        desc_label = ttk.Label(container, text="Subtitle Description & Remarks:", font=("Segoe UI", 9, "bold"), foreground=self.accent_color)
+        desc_label.pack(anchor=tk.W, pady=(4, 2))
+
+        desc_box = tk.Text(
+            container,
+            wrap=tk.WORD,
+            height=6,
+            bg="#181825",
+            fg="#cdd6f4",
+            font=("Segoe UI", 9),
+            bd=1,
+            relief=tk.SOLID,
+            padx=6,
+            pady=6
+        )
+        desc_box.insert("1.0", "Loading detailed remarks from webpage...\n")
+        desc_box.config(state=tk.DISABLED)
+        desc_box.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        def _fetch_description_async():
+            try:
+                remarks = "No additional description provided."
+                prov = self.service.providers.get(item.provider)
+                if prov and item.page_url:
+                    resp = getattr(prov, "_fetch_page", None)
+                    if callable(resp):
+                        r = prov._fetch_page(item.page_url)
+                    else:
+                        r = prov.session.get(item.page_url, timeout=5)
+
+                    if r and r.status_code == 200:
+                        soup = BeautifulSoup(r.content.decode("utf-8", "ignore"), "html.parser")
+                        if item.provider == "subhd":
+                            desc_el = soup.select_one("div.subtitle-description, div.lh-lg.subtitle-description")
+                            if desc_el:
+                                remarks = desc_el.get_text("\n", strip=True)
+                        elif item.provider == "zimuku":
+                            fieldset = soup.find("fieldset")
+                            if fieldset:
+                                remarks = fieldset.get_text("\n", strip=True)
+
+                def _update_desc():
+                    if desc_box.winfo_exists():
+                        desc_box.config(state=tk.NORMAL)
+                        desc_box.delete("1.0", tk.END)
+                        desc_box.insert("1.0", remarks)
+                        desc_box.config(state=tk.DISABLED)
+
+                detail_win.after(0, _update_desc)
+            except Exception as e:
+                logger.debug(f"[GUI] Detail fetch error: {e}")
+
+        threading.Thread(target=_fetch_description_async, daemon=True).start()
+
+        # Action Buttons inside Details
+        btn_frame = ttk.Frame(container)
+        btn_frame.pack(fill=tk.X)
+
+        browser_btn = tk.Button(
+            btn_frame,
+            text=" 🌐 Open in Browser ",
+            command=lambda: webbrowser.open(item.page_url),
+            bg="#313244",
+            fg="#89dceb",
+            font=("Segoe UI", 9),
+            relief=tk.FLAT,
+            padx=10,
+            pady=4,
+            cursor="hand2"
+        )
+        browser_btn.pack(side=tk.LEFT)
+
+        dl_btn = tk.Button(
+            btn_frame,
+            text=" ⬇️ Download & Load ",
+            command=lambda: [detail_win.destroy(), self.on_download_selected()],
+            bg=self.btn_primary_bg,
+            fg=self.btn_primary_fg,
+            font=("Segoe UI", 9, "bold"),
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            cursor="hand2"
+        )
+        dl_btn.pack(side=tk.RIGHT)
+
+    def on_open_browser(self) -> None:
+        """Open the webpage of the currently selected subtitle in the system default browser."""
+        selected = self.tree.selection()
+        if not selected:
+            return
+        item = self._get_item_by_iid(selected[0])
+        if item and item.page_url:
+            logger.info(f"[GUI] Opening URL in browser: {item.page_url}")
+            webbrowser.open(item.page_url)
 
     def _render_chips(self) -> None:
         """Render quick search keyword chip buttons."""
@@ -367,11 +727,26 @@ class SubtitlePickerGui:
             logger.info("[GUI] Search returned 0 results.")
             return
 
-        for idx, item in enumerate(results):
+        self._render_tree_rows()
+
+        first_item = self.tree.get_children()
+        if first_item:
+            self.tree.selection_set(first_item[0])
+            self.tree.focus(first_item[0])
+
+        self.status_var.set(f"Found {len(results)} subtitles. Select an item and click Download, or right-click for details.")
+        logger.info(f"[GUI] Populated {len(results)} items in table.")
+
+    def _render_tree_rows(self) -> None:
+        """Render all rows from self.results into Treeview."""
+        self.tree.delete(*self.tree.get_children())
+        for idx, item in enumerate(self.results):
             tags = item.tags
+            lang_display = tags.display_lang()
             fmt_display = "/".join(f.upper() for f in tags.fmt) if tags.fmt else "-"
-            src_display = "/".join(s.capitalize() for s in tags.source) if tags.source else "-"
-            fansub_display = tags.fansub or "-"
+            type_display = tags.display_type()
+            uploader_group_display = tags.display_uploader_or_group()
+            rating_display = item.display_rating
             score_display = f"{int(item.score)}"
 
             self.tree.insert(
@@ -380,21 +755,15 @@ class SubtitlePickerGui:
                 iid=str(idx),
                 values=(
                     item.provider.upper(),
+                    lang_display,
                     fmt_display,
-                    src_display,
-                    fansub_display,
+                    type_display,
+                    uploader_group_display,
                     item.title,
+                    rating_display,
                     score_display
                 )
             )
-
-        first_item = self.tree.get_children()
-        if first_item:
-            self.tree.selection_set(first_item[0])
-            self.tree.focus(first_item[0])
-
-        self.status_var.set(f"Found {len(results)} subtitles. Select an item and click Download.")
-        logger.info(f"[GUI] Populated {len(results)} items in table.")
 
     def _handle_search_error(self, err_msg: str) -> None:
         self.search_btn.config(state=tk.NORMAL)
@@ -435,7 +804,12 @@ class SubtitlePickerGui:
         self.download_btn.config(state=tk.NORMAL)
         if result.success:
             self.selected_path = result.saved_path
-            logger.info(f"[GUI] Download success, saved to: {result.saved_path}")
+            logger.info(f"[GUI] Download success, saved primary to: {result.saved_path}")
+            # Emit all extracted secondary subtitle tracks
+            for p in getattr(result, "all_saved_paths", []):
+                if p != result.saved_path:
+                    print(f"[SUBTITLE_EXTRACTED]{p}")
+            # Emit primary selected subtitle
             print(f"[SUBTITLE_LOADED]{result.saved_path}")
             sys.stdout.flush()
             self.root.destroy()

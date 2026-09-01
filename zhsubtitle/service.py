@@ -164,17 +164,17 @@ class SubtitleService:
                 break
 
         # Source quality weighting
-        tags = item.tags
-        if "official" in tags.source:
+        source_str = " ".join(item.tags.source).lower()
+        if "官方" in source_str or "official" in source_str:
             score += 10.0
-        elif "reprint" in tags.source:
+        elif "精修" in source_str or "转载" in source_str or "reprint" in source_str:
             score += 8.0
-        elif "original" in tags.source:
+        elif "原创" in source_str or "original" in source_str:
             score += 6.0
-        elif "ai" in tags.source:
+        elif "ai" in source_str:
             score += 2.0
 
-        if tags.bilingual:
+        if item.tags.bilingual:
             score += 5.0
 
         # Metadata matching (Release group, source, resolution)
@@ -188,21 +188,50 @@ class SubtitleService:
             if meta.year and str(meta.year) in title_lower:
                 score += 8.0
 
-            # TV episode match bonus (+35 for exact episode)
-            if meta.is_tv and meta.episode is not None:
-                ep_tokens = [
-                    f"s{meta.season:02d}e{meta.episode:02d}" if meta.season else "",
-                    f"e{meta.episode:02d}",
-                    f"ep{meta.episode:02d}",
-                    f"e{meta.episode}",
-                    f"第{meta.episode}集",
-                    f"第{meta.episode:02d}集"
-                ]
-                ep_tokens = [tok for tok in ep_tokens if tok]
-                if any(tok in title_lower for tok in ep_tokens):
-                    score += 35.0
+            # TV season and episode matching
+            if meta.is_tv:
+                title_season = None
+                m_s = re.search(r"\bs0*(\d{1,2})\b", title_lower)
+                if m_s:
+                    title_season = int(m_s.group(1))
+                else:
+                    m_s_cn = re.search(r"第\s*0*(\d{1,2})\s*季", item.title)
+                    if m_s_cn:
+                        title_season = int(m_s_cn.group(1))
+                    elif "第一季" in item.title or "第1季" in item.title:
+                        title_season = 1
+                    elif "第二季" in item.title or "第2季" in item.title:
+                        title_season = 2
+                    elif "第三季" in item.title or "第3季" in item.title:
+                        title_season = 3
+                    elif "第四季" in item.title or "第4季" in item.title:
+                        title_season = 4
 
-        return score
+                # Check season mismatch (e.g. S01 / S02 when video is S03)
+                season_mismatch = False
+                if meta.season is not None:
+                    if title_season is not None and title_season != meta.season:
+                        score -= 50.0
+                        season_mismatch = True
+                    elif title_season == meta.season or f"s{meta.season:02d}" in title_lower or f"第{meta.season}季" in item.title:
+                        score += 15.0
+
+                # TV episode match bonus (+35 for exact episode, only if season is not mismatched)
+                if meta.episode is not None and not season_mismatch:
+                    ep_tokens = [
+                        f"s{meta.season:02d}e{meta.episode:02d}" if meta.season else "",
+                        f"e{meta.episode:02d}",
+                        f"ep{meta.episode:02d}",
+                        f"e{meta.episode}",
+                        f"第{meta.episode}集",
+                        f"第{meta.episode:02d}集"
+                    ]
+                    ep_tokens = [tok for tok in ep_tokens if tok]
+                    if any(tok in title_lower for tok in ep_tokens):
+                        score += 35.0
+
+        # Clamp final match score strictly between 0 and 100
+        return min(100.0, max(0.0, score))
 
     def download_and_extract(
         self,

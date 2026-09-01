@@ -240,7 +240,7 @@ class ZimukuProvider(BaseProvider):
         meta: Optional[VideoMeta] = None,
         raw_work_title: str = ""
     ) -> List[SubtitleItem]:
-        """Parse subtitle table and extract Douban ID / IMDb ID from a Zimuku work page."""
+        """Parse subtitle table and extract Douban ID / IMDb ID / Rating from a Zimuku work page."""
         resp = self._fetch_page(work_url)
         if not resp or resp.status_code != 200:
             return []
@@ -265,7 +265,6 @@ class ZimukuProvider(BaseProvider):
 
             if raw_work_title:
                 meta.work_title = raw_work_title
-                # Extract clean Chinese title (e.g. '末日地堡 第三季' from '末日地堡 第三季 Silo Season 3 (2025)')
                 m_cn = re.match(r"^([\u4e00-\u9fa5\s\d第季]+)", raw_work_title)
                 if m_cn:
                     cn_name = m_cn.group(1).strip()
@@ -289,22 +288,69 @@ class ZimukuProvider(BaseProvider):
             sub_id = m.group(1) if m else link["href"]
 
             tags = SubtitleTags(provider=self.name)
+            rate_val = 0.0
+            rate_stars_str = ""
+            dl_count = 0
 
-            # Languages
+            # 1. Type / Source detection in td.first
+            first_td = row.find("td", class_="first")
+            if first_td:
+                first_text = first_td.get_text(" ", strip=True)
+                # Check labels
+                danger_label = first_td.find("span", class_=lambda c: c and ("label-danger" in c or "label-warning" in c or "label-success" in c or "label-primary" in c))
+                if danger_label:
+                    lbl_text = danger_label.get_text(strip=True)
+                    if lbl_text:
+                        tags.source.append(lbl_text)
+
+                if not tags.source:
+                    if "官方" in first_text:
+                        tags.source.append("官方")
+                    elif "原创" in first_text:
+                        tags.source.append("原创")
+                    elif "转载" in first_text or "精修" in first_text:
+                        tags.source.append("转载")
+                    elif "ChatGPT" in first_text or "AI" in first_text:
+                        tags.source.append("AI")
+
+                # Producer / Fansub
+                m_maker = re.search(r"制作[：:]\s*([^\s<]+)", first_text)
+                if m_maker:
+                    tags.fansub = m_maker.group(1).strip()
+
+            # 2. Languages
             lang_td = row.find("td", class_="tac lang")
             if lang_td:
                 for img in lang_td.find_all("img"):
-                    img_title = img.get("title", "")
-                    if "简体" in img_title and "chs" not in tags.lang:
-                        tags.lang.append("chs")
-                    if "繁体" in img_title and "cht" not in tags.lang:
-                        tags.lang.append("cht")
-                    if "English" in img_title and "eng" not in tags.lang:
-                        tags.lang.append("eng")
-                    if "双语" in img_title:
+                    img_title = img.get("title", "") or img.get("alt", "")
+                    img_src = img.get("src", "")
+                    if "双语" in img_title or "雙語" in img_title or "jollyroger" in img_src:
                         tags.bilingual = True
+                        if "chs" not in tags.lang:
+                            tags.lang.append("chs")
+                        if "eng" not in tags.lang:
+                            tags.lang.append("eng")
+                    if ("简体" in img_title or "簡體" in img_title or "china" in img_src) and "chs" not in tags.lang:
+                        tags.lang.append("chs")
+                    if ("繁体" in img_title or "繁體" in img_title or "hongkong" in img_src or "taiwan" in img_src) and "cht" not in tags.lang:
+                        tags.lang.append("cht")
+                    if ("English" in img_title or "uk" in img_src or "us" in img_src) and "eng" not in tags.lang:
+                        tags.lang.append("eng")
 
-            # Formats
+            # Backup language check from title
+            if "双语" in title or "中英" in title:
+                tags.bilingual = True
+                if "chs" not in tags.lang:
+                    tags.lang.append("chs")
+                if "eng" not in tags.lang:
+                    tags.lang.append("eng")
+            elif "台灣" in title or "台湾" in title or "繁體" in title or "繁体" in title or "港版" in title:
+                if "cht" not in tags.lang:
+                    tags.lang.append("cht")
+            elif not tags.lang:
+                tags.lang.append("chs")
+
+            # 3. Formats
             fmt_span = row.find("span", class_="label-info")
             if fmt_span:
                 for fmt in fmt_span.get_text(strip=True).lower().split("/"):
@@ -312,17 +358,63 @@ class ZimukuProvider(BaseProvider):
                     if f and f not in tags.fmt:
                         tags.fmt.append(f)
 
-            # Fansub
-            fansub_a = row.select_one('a[href^="/t/"]')
-            if fansub_a:
-                tags.fansub = fansub_a.get_text(strip=True)
+            # 4. Rating Stars
+            star_i = row.find("i", class_=lambda c: c and "rating-star" in c)
+            if star_i:
+                star_title = star_i.get("title", "")
+                m_score = re.search(r"(\d+(?:\.\d+)?)", star_title)
+                if m_score:
+                    raw_val = float(m_score.group(1))
+                    # Zimuku rating is 10-point (e.g. 10分 -> 5.0)
+                    rate_val = raw_val / 2.0 if raw_val > 5.0 else raw_val
+                else:
+                    # Parse from class allstarXX (e.g. allstar50 -> 5.0, allstar10 -> 1.0)
+                    for cls in star_i.get("class", []):
+                        m_cls = re.search(r"allstar(\d+)", cls)
+                        if m_cls:
+                            rate_val = float(m_cls.group(1)) / 10.0
+                            break
+
+                if rate_val > 0:
+                    star_count = min(5, max(1, int(round(rate_val))))
+                    rate_stars_str = f"{'★' * star_count}{'☆' * (5 - star_count)} {rate_val:g}"
+
+            # 5. Downloads Count & 6. Fansub / Uploader
+            tds = row.find_all("td")
+            if len(tds) >= 6:
+                dl_td = tds[4]
+                uploader_td = tds[5]
+            elif len(tds) >= 5:
+                dl_td = tds[3]
+                uploader_td = tds[4]
+            else:
+                dl_td = None
+                uploader_td = None
+
+            if dl_td:
+                try:
+                    num_match = re.search(r"(\d+)", dl_td.get_text(strip=True))
+                    if num_match:
+                        dl_count = int(num_match.group(1))
+                except Exception:
+                    pass
+
+            if uploader_td:
+                uploader_name = uploader_td.get_text(strip=True)
+                # Strip date like "4天前", "8月21日", "08-21", etc.
+                uploader_name = re.sub(r"\d+天前|\d+月\d+日|\d+小时前|\d+-\d+", "", uploader_name).strip()
+                if uploader_name:
+                    tags.uploader = uploader_name
 
             item = SubtitleItem(
                 id=sub_id,
                 title=title,
                 page_url=detail_url,
                 provider=self.name,
-                tags=tags
+                tags=tags,
+                rate=rate_val,
+                rate_stars=rate_stars_str,
+                downloads_count=dl_count
             )
             items.append(item)
 
