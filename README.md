@@ -131,8 +131,9 @@ python_path=python
 #   extract_dir={video_dir}/subs
 extract_dir=
 
-# Automatically rename extracted subtitle to match video name (yes/no)
-rename_to_video=yes
+# Automatically rename extracted subtitle to match video name (yes/no, default: no)
+# When set to no, original subtitle filenames inside archives are preserved.
+rename_to_video=no
 
 # Preferred subtitle formats in priority order (comma-separated, srt first)
 prefer_format=srt,ass,ssa,vtt

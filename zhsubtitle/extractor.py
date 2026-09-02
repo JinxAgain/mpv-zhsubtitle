@@ -2,14 +2,18 @@
 
 import gzip
 import io
+import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from typing import List, Optional, Tuple
 
 from .models import DownloadResult
+
+logger = logging.getLogger(__name__)
 
 SUBTITLE_EXTS = (".srt", ".ass", ".ssa", ".vtt", ".sub")
 SIDECAR_EXTS = (".idx",)
@@ -27,8 +31,9 @@ def fix_archive_filename(filename: str) -> str:
 
 
 def sanitize_filename(name: str) -> str:
-    """Remove illegal characters from filename."""
-    return re.sub(r'[\\/:*?"<>|\s]+', "_", name).strip("_")
+    """Remove illegal characters from filename while preserving valid spaces and symbols."""
+    clean = re.sub(r'[\\/:*?"<>|]+', "_", name).strip()
+    return clean or "subtitle"
 
 
 def pick_best_subtitle_file(
@@ -116,7 +121,7 @@ def extract_and_save_subtitle(
     target_dir: str,
     video_path: Optional[str] = None,
     episode: Optional[int] = None,
-    rename_to_video: bool = True,
+    rename_to_video: bool = False,
     prefer_format: Optional[List[str]] = None,
     prefer_language: Optional[List[str]] = None
 ) -> DownloadResult:
@@ -258,6 +263,103 @@ def _extract_from_zip(
         return DownloadResult(success=False, error_msg=f"Failed to extract ZIP archive: {e}")
 
 
+def _find_extractor_tool(cmd: str, extra_locations: List[str]) -> Optional[str]:
+    """Locate an archive extractor executable in system PATH or standard install paths."""
+    found = shutil.which(cmd)
+    if found:
+        return found
+    for path in extra_locations:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _unpack_archive_with_external_tools(archive_path: str, extract_dir: str) -> bool:
+    """
+    Unpack archives (.rar, .7z, .tar, .xz, .zip) using available system tools:
+    1. 7-Zip (7z.exe / 7za.exe)
+    2. Windows System32 tar.exe or POSIX bsdtar/tar (libarchive-based)
+    3. WinRAR (UnRAR.exe / WinRAR.exe)
+    4. Optional Python modules (py7zr, rarfile)
+    5. Python shutil.unpack_archive
+    """
+    lower = archive_path.lower()
+
+    # 1. Try 7-Zip (handles .7z, .rar, .zip, .tar, etc.)
+    exe_7z = _find_extractor_tool("7z", [
+        r"C:\Program Files\7-Zip\7z.exe",
+        r"C:\Program Files (x86)\7-Zip\7z.exe"
+    ]) or _find_extractor_tool("7za", [])
+    if exe_7z:
+        try:
+            res = subprocess.run([exe_7z, "x", "-y", f"-o{extract_dir}", archive_path], capture_output=True, text=True)
+            if res.returncode == 0:
+                logger.debug(f"[Extractor] Unpacked via 7-Zip: {archive_path}")
+                return True
+        except Exception:
+            pass
+
+    # 2. Try Windows 10/11 / POSIX tar (bsdtar with libarchive extracts .tar, .tar.gz, .7z, .rar, .zip)
+    tar_exe = _find_extractor_tool("tar", [r"C:\Windows\System32\tar.exe"])
+    if tar_exe:
+        try:
+            res = subprocess.run([tar_exe, "-xf", archive_path, "-C", extract_dir], capture_output=True, text=True)
+            if res.returncode == 0:
+                logger.debug(f"[Extractor] Unpacked via tar: {archive_path}")
+                return True
+        except Exception:
+            pass
+
+    # 3. Try UnRAR / WinRAR for .rar files
+    if lower.endswith(".rar"):
+        unrar_exe = _find_extractor_tool("unrar", [
+            r"C:\Program Files\WinRAR\UnRAR.exe",
+            r"C:\Program Files (x86)\WinRAR\UnRAR.exe",
+            r"C:\Program Files\WinRAR\WinRAR.exe",
+            r"C:\Program Files (x86)\WinRAR\WinRAR.exe"
+        ])
+        if unrar_exe:
+            try:
+                args = [unrar_exe, "x", "-ibck", "-y", archive_path, extract_dir + "\\"]
+                res = subprocess.run(args, capture_output=True, text=True)
+                if res.returncode == 0:
+                    logger.debug(f"[Extractor] Unpacked via WinRAR/UnRAR: {archive_path}")
+                    return True
+            except Exception:
+                pass
+
+    # 4. Try Python packages if installed
+    if lower.endswith(".7z"):
+        try:
+            import py7zr
+            with py7zr.SevenZipFile(archive_path, mode="r") as z:
+                z.extractall(extract_dir)
+            logger.debug(f"[Extractor] Unpacked via py7zr: {archive_path}")
+            return True
+        except Exception:
+            pass
+
+    if lower.endswith(".rar"):
+        try:
+            import rarfile
+            with rarfile.RarFile(archive_path) as rf:
+                rf.extractall(extract_dir)
+            logger.debug(f"[Extractor] Unpacked via rarfile: {archive_path}")
+            return True
+        except Exception:
+            pass
+
+    # 5. Fallback to standard library shutil.unpack_archive
+    try:
+        shutil.unpack_archive(archive_path, extract_dir)
+        logger.debug(f"[Extractor] Unpacked via shutil: {archive_path}")
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _extract_generic_archive(
     content_bytes: bytes,
     original_filename: str,
@@ -268,18 +370,27 @@ def _extract_generic_archive(
     prefer_format: Optional[List[str]],
     prefer_language: Optional[List[str]]
 ) -> DownloadResult:
-    """Handle other archive formats (.tar, etc.) using a temporary directory."""
+    """Handle other archive formats (.rar, .7z, .tar, etc.) using a temporary directory."""
     temp_dir = tempfile.mkdtemp(prefix="zhsub_")
     try:
-        temp_archive = os.path.join(temp_dir, original_filename)
+        # Determine accurate archive extension even if original filename has spacing/encoding anomalies
+        ext = os.path.splitext(original_filename.strip())[1].lower()
+        if not ext:
+            if content_bytes[:4] == b"Rar!":
+                ext = ".rar"
+            elif content_bytes[:6] == b"7z\xbc\xaf\x27\x1c":
+                ext = ".7z"
+            elif content_bytes[:2] == b"PK":
+                ext = ".zip"
+
+        temp_archive = os.path.join(temp_dir, f"archive{ext}")
         with open(temp_archive, "wb") as f:
             f.write(content_bytes)
 
-        # Try unpacking via shutil.unpack_archive
-        try:
-            shutil.unpack_archive(temp_archive, temp_dir)
-        except Exception:
-            pass
+        # Try unpacking via external tools and libraries
+        unpacked = _unpack_archive_with_external_tools(temp_archive, temp_dir)
+        if not unpacked:
+            logger.warning(f"[Extractor] External unpack tools failed for {original_filename}")
 
         # Scan for extracted subtitles
         found_subs = []
@@ -363,7 +474,8 @@ def _determine_final_name(
             counter += 1
         return f"{video_base}{lang_suffix}.{counter}{ext}"
 
-    candidate = sanitize_filename(subtitle_filename)
+    # Preserve original subtitle name without modifying it to video name
+    candidate = sanitize_filename(os.path.basename(subtitle_filename))
     if candidate not in used:
         return candidate
 

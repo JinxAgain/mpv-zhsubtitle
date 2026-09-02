@@ -1,6 +1,6 @@
 {
   "extract_dir": "",
-  "rename_to_video": true,
+  "rename_to_video": false,
   "prefer_format": ["srt", "ass", "ssa", "vtt"],
   "providers": {
     "subhd": {

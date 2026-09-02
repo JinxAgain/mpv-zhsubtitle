@@ -106,6 +106,50 @@ class TestSubtitleExtractor(unittest.TestCase):
             content = f.read()
             self.assertIn("Sample Subtitle", content)
 
+    def test_extract_tar_generic(self):
+        import tarfile
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w") as tf:
+            data = b"1\n00:00:01,000 --> 00:00:03,000\nHello Tar\n"
+            ti = tarfile.TarInfo("Sample.Movie.chs.srt")
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+        tar_bytes = tar_buf.getvalue()
+        video_path = os.path.join(self.test_dir, "Sample.Movie.2023.1080p.mkv")
+
+        res = extract_and_save_subtitle(
+            content_bytes=tar_bytes,
+            original_filename="sample_sub.tar",
+            target_dir=self.test_dir,
+            video_path=video_path,
+            rename_to_video=True
+        )
+        self.assertTrue(res.success)
+        self.assertTrue(os.path.isfile(res.saved_path))
+
+    def test_extract_zip_keep_original_names(self):
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("Furious.S01E01.WEB.CAKES.Chen.ass", "[Script Info]\nTitle: E01\n")
+            zf.writestr("Furious.S01E02.WEB.CAKES.ChEn.ass", "[Script Info]\nTitle: E02\n")
+
+        zip_bytes = zip_buf.getvalue()
+        video_path = os.path.join(self.test_dir, "MyVideo.mkv")
+
+        res = extract_and_save_subtitle(
+            content_bytes=zip_bytes,
+            original_filename="furious.zip",
+            target_dir=self.test_dir,
+            video_path=video_path,
+            rename_to_video=False
+        )
+
+        self.assertTrue(res.success)
+        self.assertEqual(len(res.all_saved_paths), 2)
+        base_names = [os.path.basename(p) for p in res.all_saved_paths]
+        self.assertIn("Furious.S01E01.WEB.CAKES.Chen.ass", base_names)
+        self.assertIn("Furious.S01E02.WEB.CAKES.ChEn.ass", base_names)
+
     def test_custom_extract_dir(self):
         custom_dir = os.path.join(self.test_dir, "custom_subtitles_vault")
         cfg = Config({"extract_dir": custom_dir})
@@ -120,7 +164,7 @@ class TestConfigManager(unittest.TestCase):
     def test_default_config(self):
         cfg = Config()
         self.assertEqual(cfg.prefer_format[0], "srt")
-        self.assertTrue(cfg.rename_to_video)
+        self.assertFalse(cfg.rename_to_video)
         self.assertTrue(cfg.is_provider_enabled("subhd"))
         self.assertTrue(cfg.is_provider_enabled("zimuku"))
 

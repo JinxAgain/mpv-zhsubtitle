@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "extract_dir": "",
-    "rename_to_video": True,
+    "rename_to_video": False,
     "prefer_format": ["srt", "ass", "ssa", "vtt"],
     "prefer_language": ["chs", "cht", "eng"],
     "providers": {
@@ -50,7 +50,7 @@ class Config:
 
     @property
     def rename_to_video(self) -> bool:
-        return bool(self._data.get("rename_to_video", True))
+        return bool(self._data.get("rename_to_video", False))
 
     @property
     def prefer_format(self) -> List[str]:

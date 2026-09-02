@@ -42,4 +42,4 @@ ENV/
 *.rar
 *.7z
 config.json
-zhsubtitle.log
+*.log
