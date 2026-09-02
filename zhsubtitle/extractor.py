@@ -19,6 +19,15 @@ SUBTITLE_EXTS = (".srt", ".ass", ".ssa", ".vtt", ".sub")
 SIDECAR_EXTS = (".idx",)
 ARCHIVE_EXTS = (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz")
 
+BILINGUAL_PATTERN = re.compile(
+    r'(?:双语|中英|简英|繁英|英简|英繁|'
+    r'(?:chs|cht|zh|chi|zho)[&+._ /-]*(?:eng?|english)|'
+    r'(?:eng?|english)[&+._ /-]*(?:chs|cht|zh|chi|zho)|'
+    r'\[(?:chs|cht|zh)[^\]]*\].*?\[(?:eng?|english)[^\]]*\]|'
+    r'\[(?:eng?|english)[^\]]*\].*?\[(?:chs|cht|zh)[^\]]*\])',
+    re.IGNORECASE
+)
+
 
 def fix_archive_filename(filename: str) -> str:
     """Fix mojibake in zip filenames caused by CP437 vs GBK/GB18030 mismatch."""
@@ -53,12 +62,7 @@ def pick_best_subtitle_file(
         return None
 
     prefer_format = [f.lower() for f in (prefer_format or ["srt", "ass", "ssa", "vtt"])]
-
-    # Bilingual patterns (e.g. zh-en, chs.eng, 简英, 繁英, 双语, chs&eng)
-    bilingual_pat = re.compile(
-        r'双语|简英|繁英|中英|chs[&+._ -]?eng|cht[&+._ -]?eng|zh[&+._ -]?en|chi[&+._ -]?eng|zho[&+._ -]?eng|en[&+._ -]?zh',
-        re.IGNORECASE
-    )
+    user_prefer_cht = bool(prefer_language and prefer_language[0].lower() in ("cht", "tc", "big5", "traditional"))
 
     # Simplified Chinese patterns
     chs_pat = re.compile(
@@ -78,7 +82,7 @@ def pick_best_subtitle_file(
     def score_file(name: str) -> Tuple[int, int, int]:
         lower = name.lower()
 
-        # 1. Episode score
+        # 1. Episode score (+1000)
         ep_score = 0
         if episode is not None:
             ep_patterns = [
@@ -92,13 +96,21 @@ def pick_best_subtitle_file(
                     ep_score = 1000
                     break
 
-        # 2. Language score (Bilingual > CHS > CHT > ENG)
+        # 2. Language score (Bilingual > CHS/CHT > ENG)
         lang_score = 0
-        if bilingual_pat.search(lower):
-            lang_score = 500
-        elif chs_pat.search(lower):
+        if BILINGUAL_PATTERN.search(lower):
+            is_traditional = bool(re.search(r'cht|繁|tc|big5|zh-tw|zh-hk|en[&+._ -]?cht|cht[&+._ -]?en', lower))
+            if user_prefer_cht:
+                lang_score = 500 if is_traditional else 480
+            else:
+                lang_score = 480 if is_traditional else 500
+        elif user_prefer_cht and cht_pat.search(lower):
+            lang_score = 300
+        elif not user_prefer_cht and chs_pat.search(lower):
             lang_score = 300
         elif cht_pat.search(lower):
+            lang_score = 280
+        elif chs_pat.search(lower):
             lang_score = 280
         elif eng_pat.search(lower):
             lang_score = 50
@@ -450,9 +462,11 @@ def _determine_final_name(
         lower_sub = subtitle_filename.lower()
 
         # Check bilingual first
-        bilingual_match = re.search(r'双语|简英|繁英|中英|zh[-_.]?en|chs[&+._ -]?eng|cht[&+._ -]?eng', lower_sub)
-        if bilingual_match:
-            lang_suffix = ".zh-en"
+        if BILINGUAL_PATTERN.search(lower_sub):
+            if any(k in lower_sub for k in ("cht", "繁", "tc", "big5", "zh-tw", "zh-hk", "en&cht", "cht&en")):
+                lang_suffix = ".zh-tw"
+            else:
+                lang_suffix = ".zh-en"
         elif any(k in lower_sub for k in ("chs", "简", "sc", "gb", "zh-cn", "zh-hans")):
             lang_suffix = ".zh-cn"
         elif any(k in lower_sub for k in ("cht", "繁", "tc", "big5", "zh-tw", "zh-hk")):

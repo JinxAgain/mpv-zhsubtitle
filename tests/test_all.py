@@ -79,6 +79,21 @@ class TestSubtitleExtractor(unittest.TestCase):
         best = pick_best_subtitle_file(files, episode=2)
         self.assertEqual(best, "Show.S01E02.chs.ass")
 
+    def test_pick_best_bilingual_en_chs(self):
+        files = [
+            "Ted.Lasso.S04E05.CHS.ass",
+            "Ted.Lasso.S04E05.CHS.srt",
+            "Ted.Lasso.S04E05.CHT.ass",
+            "Ted.Lasso.S04E05.CHT.srt",
+            "Ted.Lasso.S04E05.EN&CHS.ass",
+            "Ted.Lasso.S04E05.EN&CHS.srt",
+            "Ted.Lasso.S04E05.EN&CHT.ass",
+            "Ted.Lasso.S04E05.EN&CHT.srt",
+            "Ted.Lasso.S04E05.EN.srt"
+        ]
+        best = pick_best_subtitle_file(files, episode=5, prefer_format=["srt", "ass"])
+        self.assertEqual(best, "Ted.Lasso.S04E05.EN&CHS.srt")
+
     def test_extract_zip_in_memory(self):
         # Create a sample ZIP archive in memory
         zip_buf = io.BytesIO()
