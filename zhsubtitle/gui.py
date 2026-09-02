@@ -13,6 +13,7 @@ import webbrowser
 from bs4 import BeautifulSoup
 import requests
 
+from .cache import get_cached_search, save_cached_search
 from .config import Config, load_config
 from .guess import parse_video
 from .logger import logger
@@ -644,6 +645,16 @@ class SubtitlePickerGui:
         if not self.meta:
             return
 
+        # Check local cache first for instant GUI population
+        if self.video_path:
+            cached = get_cached_search(self.video_path)
+            if cached:
+                results, updated_meta = cached
+                logger.info(f"[GUI] Instant load: retrieved {len(results)} cached results for {self.video_path}")
+                self.meta = updated_meta
+                self._handle_auto_resolve_complete(results, from_cache=True)
+                return
+
         self.status_var.set("Auto-resolving work via Zimuku & SubHD Douban Bridge...")
         self.search_btn.config(state=tk.DISABLED)
         self.tree.delete(*self.tree.get_children())
@@ -658,13 +669,17 @@ class SubtitlePickerGui:
         try:
             results, updated_meta = self.service.auto_resolve(self.meta)
             self.meta = updated_meta
+            if self.video_path and results:
+                save_cached_search(self.video_path, results, updated_meta)
             self.root.after(0, self._handle_auto_resolve_complete, results)
         except Exception as e:
             logger.error(f"[GUI] Auto-resolve error: {e}")
             self.root.after(0, self._handle_search_error, str(e))
 
-    def _handle_auto_resolve_complete(self, results: List[SubtitleItem]) -> None:
+    def _handle_auto_resolve_complete(self, results: List[SubtitleItem], from_cache: bool = False) -> None:
         """Update GUI after auto-resolve finishes."""
+        self.search_btn.config(state=tk.NORMAL)
+
         # Update search box to Douban ID (or Chinese title) if found
         if self.meta.douban_id:
             self.query_var.set(self.meta.douban_id)
@@ -680,6 +695,9 @@ class SubtitlePickerGui:
 
         # Populate the treeview with all results
         self._populate_results(results)
+
+        if from_cache:
+            self.status_var.set(f"Loaded {len(results)} subtitles from cache. Click Search to refresh.")
 
     def start_search(self) -> None:
         """Trigger search for the query currently in the entry box."""

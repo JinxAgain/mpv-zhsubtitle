@@ -169,5 +169,95 @@ class TestConfigManager(unittest.TestCase):
         self.assertTrue(cfg.is_provider_enabled("zimuku"))
 
 
+class TestSearchCache(unittest.TestCase):
+    """Test search result caching and retrieval."""
+
+    def setUp(self):
+        from zhsubtitle.cache import clear_cached_search
+        clear_cached_search()
+
+    def tearDown(self):
+        from zhsubtitle.cache import clear_cached_search
+        clear_cached_search()
+
+    def test_cache_save_and_retrieve(self):
+        from zhsubtitle.cache import get_cached_search, save_cached_search
+        from zhsubtitle.models import SubtitleItem, SubtitleTags, VideoMeta
+
+        vpath = r"C:\Videos\My.Show.S01E01.mkv"
+        meta = VideoMeta(
+            title="My Show",
+            season=1,
+            episode=1,
+            is_tv=True,
+            douban_id="999999",
+            cn_title="我的剧集"
+        )
+        tags = SubtitleTags(
+            lang=["chs", "eng"],
+            fmt=["ass"],
+            source=["官方字幕"],
+            bilingual=True,
+            uploader="TestUser"
+        )
+        item = SubtitleItem(
+            id="sub_1",
+            title="My Show S01E01 Sub",
+            page_url="https://example.com/1",
+            provider="subhd",
+            tags=tags,
+            rate_stars="★★★★★ 5.0",
+            downloads_count=500,
+            score=100.0
+        )
+
+        # Initially no cache
+        self.assertIsNone(get_cached_search(vpath))
+
+        # Save to cache
+        save_cached_search(vpath, [item], meta)
+
+        # Retrieve from cache
+        cached = get_cached_search(vpath)
+        self.assertIsNotNone(cached)
+        cached_items, cached_meta = cached
+
+        self.assertEqual(len(cached_items), 1)
+        self.assertEqual(cached_meta.douban_id, "999999")
+        self.assertEqual(cached_meta.cn_title, "我的剧集")
+        self.assertEqual(cached_items[0].id, "sub_1")
+        self.assertEqual(cached_items[0].tags.uploader, "TestUser")
+        self.assertEqual(cached_items[0].tags.display_lang(), "中英双语")
+        self.assertEqual(cached_items[0].score, 100.0)
+
+    def test_cache_expiration(self):
+        from zhsubtitle.cache import get_cached_search, save_cached_search
+        from zhsubtitle.models import SubtitleItem, VideoMeta
+
+        vpath = r"C:\Videos\ExpireTest.mkv"
+        meta = VideoMeta(title="ExpireTest")
+        item = SubtitleItem(id="sub_2", title="Sub 2", page_url="http://a.com", provider="zimuku")
+
+        save_cached_search(vpath, [item], meta)
+        # Check with max_age = -1 (forced expired)
+        self.assertIsNone(get_cached_search(vpath, max_age=-1))
+
+    def test_cache_pruning_max_entries(self):
+        from zhsubtitle.cache import save_cached_search, _prune_cache, CACHE_DIR
+        from zhsubtitle.models import SubtitleItem, VideoMeta
+
+        # Create 5 entries and prune to max 2
+        for i in range(5):
+            vpath = f"C:\\Videos\\Movie_{i}.mkv"
+            meta = VideoMeta(title=f"Movie_{i}")
+            item = SubtitleItem(id=f"id_{i}", title=f"Title {i}", page_url="", provider="zimuku")
+            save_cached_search(vpath, [item], meta)
+
+        # Enforce max 2 entries
+        _prune_cache(max_age=86400, max_entries=2)
+        remaining = [f for f in os.listdir(CACHE_DIR) if f.endswith(".json")]
+        self.assertLessEqual(len(remaining), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
