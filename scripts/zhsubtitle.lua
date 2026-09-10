@@ -16,7 +16,25 @@ local options = {
     default_mode = "gui", -- 'gui' (Visual Picker) or 'auto' (Direct Download)
     gui_key = "",
     auto_key = "",
-    notify_duration = 3
+    notify_duration = 3,
+
+    -- Settings shared with Python backend (defined here to suppress MPV 'unknown key' warnings)
+    extract_dir = "",
+    rename_to_video = "no",
+    prefer_format = "srt,ass,ssa,vtt",
+    prefer_language = "chs,cht,eng",
+
+    subhd_enabled = "yes",
+    subhd_base_url = "https://subhd.tv",
+    subhd_fallback_urls = "https://subhd.me,https://subhd.one",
+    subhd_timeout = 5,
+
+    zimuku_enabled = "yes",
+    zimuku_base_url = "https://srtku.com",
+    zimuku_fallback_urls = "https://zmk.pw,https://zimuku.org",
+    zimuku_timeout = 5,
+
+    timeout = 10
 }
 
 opt.read_options(options, "zhsubtitle")
