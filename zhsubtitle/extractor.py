@@ -15,7 +15,7 @@ from .models import DownloadResult
 
 logger = logging.getLogger(__name__)
 
-SUBTITLE_EXTS = (".srt", ".ass", ".ssa", ".vtt", ".sub")
+SUBTITLE_EXTS = (".srt", ".ass", ".ssa", ".vtt", ".sub", ".sup")
 SIDECAR_EXTS = (".idx",)
 ARCHIVE_EXTS = (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz")
 
@@ -61,7 +61,7 @@ def pick_best_subtitle_file(
     if not filenames:
         return None
 
-    prefer_format = [f.lower() for f in (prefer_format or ["srt", "ass", "ssa", "vtt"])]
+    prefer_format = [f.lower() for f in (prefer_format or ["srt", "ass", "ssa", "vtt", "sup"])]
     user_prefer_cht = bool(prefer_language and prefer_language[0].lower() in ("cht", "tc", "big5", "traditional"))
 
     # Simplified Chinese patterns

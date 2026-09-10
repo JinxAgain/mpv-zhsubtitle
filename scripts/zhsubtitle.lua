@@ -21,7 +21,7 @@ local options = {
     -- Settings shared with Python backend (defined here to suppress MPV 'unknown key' warnings)
     extract_dir = "",
     rename_to_video = "no",
-    prefer_format = "srt,ass,ssa,vtt",
+    prefer_format = "srt,ass,ssa,vtt,sup",
     prefer_language = "chs,cht,eng",
 
     subhd_enabled = "yes",

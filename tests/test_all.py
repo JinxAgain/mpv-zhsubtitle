@@ -94,6 +94,33 @@ class TestSubtitleExtractor(unittest.TestCase):
         best = pick_best_subtitle_file(files, episode=5, prefer_format=["srt", "ass"])
         self.assertEqual(best, "Ted.Lasso.S04E05.EN&CHS.srt")
 
+    def test_prefer_format_sup_priority(self):
+        files = ["Movie.chs.sup", "Movie.chs.srt", "Movie.chs.ass"]
+        # By default, srt and ass must beat sup
+        best = pick_best_subtitle_file(files, prefer_format=["srt", "ass", "sup"])
+        self.assertEqual(best, "Movie.chs.srt")
+
+        # If user explicitly prioritizes sup, sup must win
+        best_sup = pick_best_subtitle_file(files, prefer_format=["sup", "srt", "ass"])
+        self.assertEqual(best_sup, "Movie.chs.sup")
+
+    def test_extract_sup_subtitle(self):
+        # Create ZIP containing a .sup file
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("BluRay.Movie.chs.sup", b"PGSSUPMAGICBYTES\x00\x01\x02")
+
+        res = extract_and_save_subtitle(
+            content_bytes=zip_buf.getvalue(),
+            original_filename="bluray_sup.zip",
+            target_dir=self.test_dir,
+            video_path=os.path.join(self.test_dir, "BluRay.Movie.mkv"),
+            rename_to_video=False
+        )
+        self.assertTrue(res.success)
+        self.assertTrue(res.saved_path.endswith(".sup"))
+        self.assertTrue(os.path.isfile(res.saved_path))
+
     def test_extract_zip_in_memory(self):
         # Create a sample ZIP archive in memory
         zip_buf = io.BytesIO()

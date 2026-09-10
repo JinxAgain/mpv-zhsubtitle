@@ -177,6 +177,10 @@ class SubtitleService:
         if item.tags.bilingual:
             score += 5.0
 
+        # Prefer text-based subtitle formats (SRT, ASS, VTT) over pure graphic formats (SUP)
+        if any(f in item.tags.fmt for f in ("srt", "ass", "ssa", "vtt")):
+            score += 3.0
+
         # Metadata matching (Release group, source, resolution)
         if meta:
             if meta.release_group and meta.release_group.lower() in title_lower:

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 DEFAULT_CONFIG: Dict[str, Any] = {
     "extract_dir": "",
     "rename_to_video": False,
-    "prefer_format": ["srt", "ass", "ssa", "vtt"],
+    "prefer_format": ["srt", "ass", "ssa", "vtt", "sup"],
     "prefer_language": ["chs", "cht", "eng"],
     "providers": {
         "subhd": {
@@ -54,7 +54,7 @@ class Config:
 
     @property
     def prefer_format(self) -> List[str]:
-        return self._data.get("prefer_format", ["srt", "ass", "ssa", "vtt"])
+        return self._data.get("prefer_format", ["srt", "ass", "ssa", "vtt", "sup"])
 
     @property
     def prefer_language(self) -> List[str]:

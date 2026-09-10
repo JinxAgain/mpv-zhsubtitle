@@ -450,7 +450,8 @@ class ZimukuProvider(BaseProvider):
             file_url = urllib.parse.urljoin(domain_base, a["href"])
             logger.info(f"[Zimuku] Trying mirror download from: {file_url}")
             try:
-                file_resp = self.session.get(file_url, headers={"Referer": dl_url}, timeout=self.timeout)
+                dl_timeout = max(self.timeout * 6, 30)
+                file_resp = self.session.get(file_url, headers={"Referer": dl_url}, timeout=dl_timeout)
                 if file_resp.status_code == 200 and len(file_resp.content) >= FILE_MIN_SIZE:
                     filename = self.extract_filename_from_response(file_resp, default=f"zimuku_{item.id}.zip")
                     logger.info(f"[Zimuku] Successfully downloaded {filename} ({len(file_resp.content)} bytes)")

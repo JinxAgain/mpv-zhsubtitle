@@ -246,7 +246,8 @@ class SubhdProvider(BaseProvider):
 
             # Step 4: Fetch actual file bytes
             logger.info(f"[SubHD] Fetching file content from {file_url}")
-            file_resp = self.session.get(file_url, headers={"Referer": down_url}, timeout=self.timeout)
+            dl_timeout = max(self.timeout * 6, 30)
+            file_resp = self.session.get(file_url, headers={"Referer": down_url}, timeout=dl_timeout)
             if file_resp.status_code != 200:
                 logger.warning(f"[SubHD] File fetch returned HTTP {file_resp.status_code}")
                 return None, ""

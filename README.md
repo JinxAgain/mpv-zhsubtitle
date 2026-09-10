@@ -136,7 +136,7 @@ extract_dir=
 rename_to_video=no
 
 # Preferred subtitle formats in priority order (comma-separated, srt first)
-prefer_format=srt,ass,ssa,vtt
+prefer_format=srt,ass,ssa,vtt,sup
 
 # Preferred subtitle languages (comma-separated)
 prefer_language=chs,cht,eng
