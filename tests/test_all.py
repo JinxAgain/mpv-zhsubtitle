@@ -250,7 +250,8 @@ class TestSearchCache(unittest.TestCase):
             tags=tags,
             rate_stars="★★★★★ 5.0",
             downloads_count=500,
-            score=100.0
+            score=100.0,
+            upload_date="2026-09-16"
         )
 
         # Initially no cache
@@ -271,6 +272,7 @@ class TestSearchCache(unittest.TestCase):
         self.assertEqual(cached_items[0].tags.uploader, "TestUser")
         self.assertEqual(cached_items[0].tags.display_lang(), "中英双语")
         self.assertEqual(cached_items[0].score, 100.0)
+        self.assertEqual(cached_items[0].upload_date, "2026-09-16")
 
     def test_cache_expiration(self):
         from zhsubtitle.cache import get_cached_search, save_cached_search
@@ -278,11 +280,54 @@ class TestSearchCache(unittest.TestCase):
 
         vpath = r"C:\Videos\ExpireTest.mkv"
         meta = VideoMeta(title="ExpireTest")
-        item = SubtitleItem(id="sub_2", title="Sub 2", page_url="http://a.com", provider="zimuku")
+        item = SubtitleItem(id="sub_2", title="Sub 2", page_url="http://a.com", provider="zimuku", upload_date="2026-08-01")
 
         save_cached_search(vpath, [item], meta)
         # Check with max_age = -1 (forced expired)
         self.assertIsNone(get_cached_search(vpath, max_age=-1))
+
+    def test_provider_date_parsing(self):
+        from bs4 import BeautifulSoup
+        from zhsubtitle.providers.subhd import SubhdProvider
+        from zhsubtitle.providers.zimuku import ZimukuProvider
+
+        # 1. SubHD HTML block
+        subhd_html = """
+        <div class="bg-white shadow-sm rounded-3 mb-4">
+            <a href="/a/12345">Link</a>
+            <div class="f16"><a href="/a/12345">Test Subtitle</a></div>
+            <time data-local-time="relative" datetime="2026-09-16T11:31:35.000Z">09-16 11:31</time>
+        </div>
+        """
+        subhd = SubhdProvider()
+        items = subhd._parse_search_results(subhd_html)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].upload_date, "2026-09-16")
+
+        # 2. Zimuku row
+        zimuku_html = """
+        <div class="subs box clearfix">
+            <tbody>
+                <tr>
+                    <td class="first"><a href="/detail/999.html"><b>Zimuku Test</b></a></td>
+                    <td class="last hidden-xs">
+                        <a href="/u/1">uploader</a>
+                        <span class="glyphicon glyphicon-time"></span> 9月4日
+                    </td>
+                </tr>
+            </tbody>
+        </div>
+        """
+        soup_z = BeautifulSoup(zimuku_html, "html.parser")
+        zimuku = ZimukuProvider()
+        # Mock session fetch_page
+        zimuku._fetch_page = lambda url: None
+        # test directly with soup on _parse_work_page logic or test row parsing
+        row = soup_z.select_one("tbody tr")
+        last_td = row.select_one("td.last")
+        time_icon = last_td.select_one(".glyphicon-time")
+        parsed_date = str(time_icon.next_sibling).strip() if time_icon and time_icon.next_sibling else ""
+        self.assertEqual(parsed_date, "9月4日")
 
     def test_cache_pruning_max_entries(self):
         from zhsubtitle.cache import save_cached_search, _prune_cache, CACHE_DIR

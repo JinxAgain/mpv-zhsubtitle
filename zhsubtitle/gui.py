@@ -93,10 +93,16 @@ class TreeviewTooltip:
         if item.tags.fansub and item.tags.fansub != uploader_disp and item.tags.fansub not in ("见字幕文件", "见片头", "见压缩包", "-"):
             info_lines.append(f"Fansub / Studio: {item.tags.fansub}")
 
+        extra_parts = []
+        if item.upload_date:
+            extra_parts.append(f"Date: {item.upload_date}")
         if item.rate_stars or item.rate > 0:
-            info_lines.append(f"Rating: {item.display_rating}  |  Downloads: {item.downloads_count}")
-        elif item.downloads_count > 0:
-            info_lines.append(f"Downloads: {item.downloads_count}")
+            extra_parts.append(f"Rating: {item.display_rating}")
+        if item.downloads_count > 0:
+            extra_parts.append(f"Downloads: {item.downloads_count}")
+
+        if extra_parts:
+            info_lines.append("  |  ".join(extra_parts))
 
         info_lbl = tk.Label(
             frame,
@@ -304,8 +310,9 @@ class SubtitlePickerGui:
             "format": ("Format", 60, tk.CENTER, False),
             "type": ("Type", 75, tk.CENTER, False),
             "fansub": ("Uploader / Group", 120, tk.W, False),
-            "title": ("Subtitle Name / Release", 420, tk.W, True),
-            "rating": ("Rating", 105, tk.CENTER, False),
+            "title": ("Subtitle Name / Release", 350, tk.W, True),
+            "rating": ("Rating", 95, tk.CENTER, False),
+            "date": ("Date", 85, tk.CENTER, False),
             "score": ("Match", 55, tk.CENTER, False)
         }
 
@@ -404,7 +411,7 @@ class SubtitlePickerGui:
         current_col = self.sort_column_state.get("col")
         current_rev = self.sort_column_state.get("reverse", False)
 
-        new_rev = not current_rev if current_col == col else (col in ("score", "rating"))
+        new_rev = not current_rev if current_col == col else (col in ("score", "rating", "date"))
         self.sort_column_state = {"col": col, "reverse": new_rev}
 
         def _sort_key(item: SubtitleItem):
@@ -422,6 +429,8 @@ class SubtitlePickerGui:
                 return item.title.lower()
             elif col == "rating":
                 return item.rate
+            elif col == "date":
+                return item.upload_date or ""
             elif col == "score":
                 return item.score
             return 0
@@ -485,6 +494,7 @@ class SubtitlePickerGui:
             ("Language:", f"{item.tags.display_lang()}"),
             ("Format:", f"{'/'.join(f.upper() for f in item.tags.fmt) or '-'}"),
             ("Type / Source:", f"{item.tags.display_type()}"),
+            ("Upload Date:", f"{item.upload_date or '-'}"),
             ("Uploader:", f"{item.tags.uploader or '-'}"),
             ("Fansub / Studio:", f"{item.tags.fansub or '-'}"),
             ("Rating Stars:", f"{item.display_rating}"),
@@ -493,6 +503,7 @@ class SubtitlePickerGui:
         ]
 
         # 2-column layout for metadata
+        val_labels = {}
         for idx, (label, val) in enumerate(details):
             r = idx // 2
             c = (idx % 2) * 2
@@ -501,6 +512,7 @@ class SubtitlePickerGui:
 
             val_lbl = ttk.Label(grid_frame, text=val, font=("Segoe UI", 9), foreground=self.fg_color)
             val_lbl.grid(row=r, column=c + 1, sticky=tk.W, pady=2, padx=(0, 16))
+            val_labels[label] = val_lbl
 
         # Asynchronous Description / Remarks Text Area
         desc_label = ttk.Label(container, text="Subtitle Description & Remarks:", font=("Segoe UI", 9, "bold"), foreground=self.accent_color)
@@ -525,6 +537,7 @@ class SubtitlePickerGui:
         def _fetch_description_async():
             try:
                 remarks = "No additional description provided."
+                detail_date = ""
                 prov = self.service.providers.get(item.provider)
                 if prov and item.page_url:
                     resp = getattr(prov, "_fetch_page", None)
@@ -534,15 +547,23 @@ class SubtitlePickerGui:
                         r = prov.session.get(item.page_url, timeout=5)
 
                     if r and r.status_code == 200:
-                        soup = BeautifulSoup(r.content.decode("utf-8", "ignore"), "html.parser")
+                        content_str = r.content.decode("utf-8", "ignore")
+                        soup = BeautifulSoup(content_str, "html.parser")
                         if item.provider == "subhd":
                             desc_el = soup.select_one("div.subtitle-description, div.lh-lg.subtitle-description")
                             if desc_el:
                                 remarks = desc_el.get_text("\n", strip=True)
+                            time_el = soup.find("time")
+                            if time_el:
+                                dt = time_el.get("datetime", "")
+                                detail_date = dt.split("T")[0].strip() if dt else time_el.get_text(strip=True)
                         elif item.provider == "zimuku":
                             fieldset = soup.find("fieldset")
                             if fieldset:
                                 remarks = fieldset.get_text("\n", strip=True)
+                            m_up = re.search(r"上传时间[：:]\s*([^\s<]+(?:\s+\d+:\d+)?)", content_str)
+                            if m_up:
+                                detail_date = m_up.group(1).strip()
 
                 def _update_desc():
                     if desc_box.winfo_exists():
@@ -550,6 +571,8 @@ class SubtitlePickerGui:
                         desc_box.delete("1.0", tk.END)
                         desc_box.insert("1.0", remarks)
                         desc_box.config(state=tk.DISABLED)
+                    if detail_date and "Upload Date:" in val_labels and val_labels["Upload Date:"].winfo_exists():
+                        val_labels["Upload Date:"].config(text=detail_date)
 
                 detail_win.after(0, _update_desc)
             except Exception as e:
@@ -765,6 +788,7 @@ class SubtitlePickerGui:
             type_display = tags.display_type()
             uploader_group_display = tags.display_uploader_or_group()
             rating_display = item.display_rating
+            date_display = item.upload_date or "-"
             score_display = f"{int(item.score)}"
 
             self.tree.insert(
@@ -779,6 +803,7 @@ class SubtitlePickerGui:
                     uploader_group_display,
                     item.title,
                     rating_display,
+                    date_display,
                     score_display
                 )
             )

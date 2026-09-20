@@ -399,10 +399,20 @@ class ZimukuProvider(BaseProvider):
                 except Exception:
                     pass
 
+            upload_date = ""
             if uploader_td:
+                # Extract upload date from .glyphicon-time icon or text pattern
+                time_icon = uploader_td.select_one(".glyphicon-time")
+                if time_icon and time_icon.next_sibling:
+                    upload_date = str(time_icon.next_sibling).strip()
+                if not upload_date:
+                    m_d = re.search(r"(\d{4}-\d{1,2}-\d{1,2}|\d+月\d+日|\d+-\d+|\d+天前|\d+小时前)", uploader_td.get_text())
+                    if m_d:
+                        upload_date = m_d.group(1).strip()
+
                 uploader_name = uploader_td.get_text(strip=True)
                 # Strip date like "4天前", "8月21日", "08-21", etc.
-                uploader_name = re.sub(r"\d+天前|\d+月\d+日|\d+小时前|\d+-\d+", "", uploader_name).strip()
+                uploader_name = re.sub(r"\d+天前|\d+月\d+日|\d+小时前|\d+-\d+|\d{4}-\d{1,2}-\d{1,2}", "", uploader_name).strip()
                 if uploader_name:
                     tags.uploader = uploader_name
 
@@ -414,7 +424,8 @@ class ZimukuProvider(BaseProvider):
                 tags=tags,
                 rate=rate_val,
                 rate_stars=rate_stars_str,
-                downloads_count=dl_count
+                downloads_count=dl_count,
+                upload_date=upload_date
             )
             items.append(item)
 

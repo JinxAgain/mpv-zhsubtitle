@@ -221,6 +221,7 @@ class SubtitleItem:
     rate_stars: str = ""
     downloads_count: int = 0
     score: float = 0.0
+    upload_date: str = ""
 
     @property
     def display_title(self) -> str:

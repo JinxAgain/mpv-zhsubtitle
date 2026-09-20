@@ -110,13 +110,28 @@ class SubhdProvider(BaseProvider):
             tags, dl_count = self._parse_tags_from_element(block)
             page_url = f"{self.base_url}/a/{sid}"
 
+            # Extract upload date from <time> tag or text
+            upload_date = ""
+            time_el = block.find("time")
+            if time_el:
+                dt_attr = time_el.get("datetime", "")
+                if dt_attr:
+                    upload_date = dt_attr.split("T")[0].strip()
+                if not upload_date:
+                    upload_date = time_el.get_text(strip=True)
+            if not upload_date:
+                m_date = re.search(r"\b(\d{4}-\d{1,2}-\d{1,2})\b", block.get_text())
+                if m_date:
+                    upload_date = m_date.group(1).strip()
+
             item = SubtitleItem(
                 id=sid,
                 title=title,
                 page_url=page_url,
                 provider=self.name,
                 tags=tags,
-                downloads_count=dl_count
+                downloads_count=dl_count,
+                upload_date=upload_date
             )
             items.append(item)
 
