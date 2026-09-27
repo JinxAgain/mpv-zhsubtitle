@@ -345,6 +345,45 @@ class TestSearchCache(unittest.TestCase):
         remaining = [f for f in os.listdir(CACHE_DIR) if f.endswith(".json")]
         self.assertLessEqual(len(remaining), 2)
 
+    def test_movie_year_resolution_and_validation(self):
+        from unittest.mock import MagicMock
+        from zhsubtitle.guess import parse_video
+        from zhsubtitle.models import VideoMeta
+        from zhsubtitle.providers.zimuku import ZimukuProvider
+
+        # 1. Test filename parsing
+        meta = parse_video("Villain.2010.JAPANESE.1080p.BluRay.x264.DTS-FGT.mkv")
+        self.assertEqual(meta.title, "Villain")
+        self.assertEqual(meta.year, 2010)
+
+        zimuku = ZimukuProvider()
+
+        # 2. Test year validation in _parse_work_page:
+        # If work is 2014, but meta is 2010, Douban ID must NOT be bound
+        work_2014_html = """
+        <html><body>
+            <a href="https://movie.douban.com/subject/25830594/">Douban</a>
+            <div class="subs box clearfix"><tbody></tbody></div>
+        </body></html>
+        """
+        zimuku._fetch_page = MagicMock(return_value=MagicMock(status_code=200, content=work_2014_html.encode("utf-8")))
+        test_meta_2010 = VideoMeta(title="Villain", year=2010)
+        zimuku._parse_work_page("https://srtku.com/subs/30870.html", "https://srtku.com", meta=test_meta_2010, raw_work_title="迷情杀机 Ek Villain (2014)")
+        self.assertEqual(test_meta_2010.douban_id, "", "Mismatched work year (2014 vs 2010) should not bind douban_id")
+
+        # 3. If work is 2010, Douban ID must be bound
+        work_2010_html = """
+        <html><body>
+            <a href="https://movie.douban.com/subject/4135443/">Douban</a>
+            <div class="subs box clearfix"><tbody></tbody></div>
+        </body></html>
+        """
+        zimuku._fetch_page = MagicMock(return_value=MagicMock(status_code=200, content=work_2010_html.encode("utf-8")))
+        zimuku._parse_work_page("https://srtku.com/subs/25877.html", "https://srtku.com", meta=test_meta_2010, raw_work_title="恶人 (2010)")
+        self.assertEqual(test_meta_2010.douban_id, "4135443", "Matching work year (2010) should bind douban_id")
+        self.assertEqual(test_meta_2010.cn_title, "恶人")
+
 
 if __name__ == "__main__":
     unittest.main()
+

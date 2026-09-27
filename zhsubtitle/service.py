@@ -43,7 +43,10 @@ class SubtitleService:
         # Stage 1: Query Zimuku to resolve work & extract Douban / IMDb IDs
         if zimuku:
             try:
-                base_query = meta.title or meta.alternative_title or meta.raw_name
+                if not meta.is_tv and meta.title and meta.year:
+                    base_query = f"{meta.title} {meta.year}"
+                else:
+                    base_query = meta.title or meta.alternative_title or meta.raw_name
                 logger.info(f"[Service] Auto-resolving work on Zimuku for '{base_query}'...")
                 zimuku_subs = zimuku.search(base_query, meta=meta)
                 all_results.extend(zimuku_subs)
@@ -60,17 +63,34 @@ class SubtitleService:
                 if meta.imdb_id:
                     subhd_queries.append(meta.imdb_id)
 
-                best_cn = meta.cn_title or meta.alternative_title or meta.title
-                if meta.is_tv and meta.season:
-                    subhd_queries.append(f"{best_cn} {to_cn_season(meta.season)}")
-                    subhd_queries.append(f"{best_cn} 第{meta.season}季")
-                elif meta.year:
-                    subhd_queries.append(f"{best_cn} {meta.year}")
-                else:
-                    subhd_queries.append(best_cn)
+                best_cn = meta.cn_title or meta.alternative_title
+                if best_cn:
+                    if meta.is_tv and meta.season:
+                        subhd_queries.append(f"{best_cn} {to_cn_season(meta.season)}")
+                        subhd_queries.append(f"{best_cn} 第{meta.season}季")
+                    elif meta.year:
+                        subhd_queries.append(f"{best_cn} {meta.year}")
+                    else:
+                        subhd_queries.append(best_cn)
+
+                if meta.title:
+                    if meta.is_tv and meta.season:
+                        subhd_queries.append(f"{meta.title} S{meta.season:02d}")
+                    elif meta.year:
+                        subhd_queries.append(f"{meta.title} {meta.year}")
+                    subhd_queries.append(meta.title)
+
+                # Deduplicate queries while preserving order
+                seen_sq = set()
+                clean_sq = []
+                for sq in subhd_queries:
+                    sq_clean = " ".join(sq.split()).strip()
+                    if sq_clean and sq_clean not in seen_sq:
+                        seen_sq.add(sq_clean)
+                        clean_sq.append(sq_clean)
 
                 subhd_subs: List[SubtitleItem] = []
-                for sq in subhd_queries:
+                for sq in clean_sq:
                     logger.info(f"[Service] Querying SubHD with '{sq}'...")
                     subhd_subs = subhd.search(sq, meta=meta)
                     if subhd_subs:

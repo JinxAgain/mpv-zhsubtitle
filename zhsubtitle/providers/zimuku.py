@@ -187,6 +187,17 @@ class ZimukuProvider(BaseProvider):
                 if meta.season:
                     candidate_queries.append(f"{meta.alternative_title} {to_cn_season(meta.season)}")
                 candidate_queries.append(meta.alternative_title)
+        elif meta and not meta.is_tv and meta.title:
+            if meta.year:
+                clean_cand = f"{meta.title} {meta.year}"
+                if clean_cand not in candidate_queries:
+                    candidate_queries.insert(0, clean_cand)
+                if meta.alternative_title:
+                    candidate_queries.append(f"{meta.alternative_title} {meta.year}")
+            if meta.title not in candidate_queries:
+                candidate_queries.append(meta.title)
+            if meta.alternative_title and meta.alternative_title not in candidate_queries:
+                candidate_queries.append(meta.alternative_title)
 
         # Deduplicate candidates
         seen_cand = set()
@@ -215,6 +226,23 @@ class ZimukuProvider(BaseProvider):
                     continue
 
                 logger.info(f"[Zimuku] Found {len(work_items)} works for '{target_query}' on {domain}")
+
+                # If meta has a target year, sort works by year distance to prioritize exact year matches
+                if meta and meta.year:
+                    def _work_year_distance(work_el) -> int:
+                        title_tag = work_el.select_one("div.title p.tt a")
+                        if not title_tag:
+                            return 999
+                        m_y = re.search(r"\((\d{4})\)", title_tag.get_text(strip=True))
+                        if m_y:
+                            try:
+                                return abs(int(m_y.group(1)) - meta.year)
+                            except ValueError:
+                                pass
+                        return 100
+
+                    work_items.sort(key=_work_year_distance)
+
                 for work in work_items[:3]:
                     title_a = work.select_one("div.title p.tt a")
                     if not title_a or not title_a.get("href"):
@@ -249,28 +277,44 @@ class ZimukuProvider(BaseProvider):
 
         # Extract Douban ID & IMDb ID to enrich metadata
         if meta:
-            douban_a = soup.find("a", href=re.compile(r"douban\.com/(?:subject|movie)/(\d+)"))
-            if douban_a:
-                m_douban = re.search(r"/(\d+)", douban_a["href"])
-                if m_douban and not meta.douban_id:
-                    meta.douban_id = m_douban.group(1)
-                    logger.info(f"[Zimuku] Extracted Douban ID: {meta.douban_id}")
+            # Check year compatibility before binding Douban ID / IMDb ID / Chinese title to meta
+            year_matches = True
+            if meta.year and raw_work_title:
+                m_yr = re.search(r"\((\d{4})\)", raw_work_title)
+                if m_yr:
+                    try:
+                        work_yr = int(m_yr.group(1))
+                        if abs(work_yr - meta.year) > 1:
+                            year_matches = False
+                            logger.warning(
+                                f"[Zimuku] Skipping Douban/IMDb binding: work year {work_yr} differs from target year {meta.year} for '{raw_work_title}'"
+                            )
+                    except ValueError:
+                        pass
 
-            imdb_a = soup.find("a", href=re.compile(r"imdb\.com/title/(tt\d+)"))
-            if imdb_a:
-                m_imdb = re.search(r"(tt\d+)", imdb_a["href"])
-                if m_imdb and not meta.imdb_id:
-                    meta.imdb_id = m_imdb.group(1)
-                    logger.info(f"[Zimuku] Extracted IMDb ID: {meta.imdb_id}")
+            if year_matches:
+                douban_a = soup.find("a", href=re.compile(r"douban\.com/(?:subject|movie)/(\d+)"))
+                if douban_a:
+                    m_douban = re.search(r"/(\d+)", douban_a["href"])
+                    if m_douban and not meta.douban_id:
+                        meta.douban_id = m_douban.group(1)
+                        logger.info(f"[Zimuku] Extracted Douban ID: {meta.douban_id}")
 
-            if raw_work_title:
-                meta.work_title = raw_work_title
-                m_cn = re.match(r"^([\u4e00-\u9fa5\s\d第季]+)", raw_work_title)
-                if m_cn:
-                    cn_name = m_cn.group(1).strip()
-                    if cn_name and not meta.cn_title:
-                        meta.cn_title = cn_name
-                        logger.info(f"[Zimuku] Extracted Chinese title: {meta.cn_title}")
+                imdb_a = soup.find("a", href=re.compile(r"imdb\.com/title/(tt\d+)"))
+                if imdb_a:
+                    m_imdb = re.search(r"(tt\d+)", imdb_a["href"])
+                    if m_imdb and not meta.imdb_id:
+                        meta.imdb_id = m_imdb.group(1)
+                        logger.info(f"[Zimuku] Extracted IMDb ID: {meta.imdb_id}")
+
+                if raw_work_title and not meta.work_title:
+                    meta.work_title = raw_work_title
+                    m_cn = re.match(r"^([\u4e00-\u9fa5\s\d第季]+)", raw_work_title)
+                    if m_cn:
+                        cn_name = m_cn.group(1).strip()
+                        if cn_name and not meta.cn_title:
+                            meta.cn_title = cn_name
+                            logger.info(f"[Zimuku] Extracted Chinese title: {meta.cn_title}")
 
         subs_box = soup.select_one("div.subs.box.clearfix")
         if not subs_box or not subs_box.tbody:
