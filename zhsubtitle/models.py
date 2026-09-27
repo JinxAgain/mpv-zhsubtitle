@@ -56,10 +56,10 @@ class VideoMeta:
         best_cn = self.cn_title or self.alternative_title or self.title
         if self.is_tv and self.season:
             cn_season = to_cn_season(self.season)
-            if cn_season and (cn_season in best_cn or f"第{self.season}季" in best_cn):
-                cn_query = best_cn
-            else:
-                cn_query = f"{best_cn} {cn_season}".strip()
+            clean_base = re.sub(r"第\s*[一二三四五六七八九十\d]+\s*季", "", best_cn).strip()
+            clean_base = re.sub(r"\b(?:season|s)\s*0*\d{1,2}\b", "", clean_base, flags=re.IGNORECASE).strip()
+            clean_base = clean_base or best_cn
+            cn_query = f"{clean_base} {cn_season}".strip()
             chips.append((f"CN Title + Season: {cn_query}", cn_query))
         elif self.year:
             if str(self.year) in best_cn:
@@ -98,9 +98,11 @@ class VideoMeta:
         if best_cn:
             if self.is_tv and self.season:
                 cn_season = to_cn_season(self.season)
-                if cn_season not in best_cn and f"第{self.season}季" not in best_cn:
-                    queries.append(f"{best_cn} {cn_season}")
-                queries.append(best_cn)
+                clean_base = re.sub(r"第\s*[一二三四五六七八九十\d]+\s*季", "", best_cn).strip()
+                clean_base = re.sub(r"\b(?:season|s)\s*0*\d{1,2}\b", "", clean_base, flags=re.IGNORECASE).strip()
+                clean_base = clean_base or best_cn
+                queries.append(f"{clean_base} {cn_season}")
+                queries.append(clean_base)
             elif self.year:
                 if str(self.year) not in best_cn:
                     queries.append(f"{best_cn} {self.year}")

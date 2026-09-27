@@ -15,6 +15,32 @@ from ..models import SubtitleItem, SubtitleTags, VideoMeta, to_cn_season
 
 FILE_MIN_SIZE = 100
 
+CN_SEASON_REVERSE = {
+    "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10,
+    "十一": 11, "十二": 12, "十三": 13, "十四": 14, "十五": 15
+}
+
+
+def extract_season_from_text(text: str) -> Optional[int]:
+    """Extract season number from text (e.g. 'Season 2', 'S06', '第二季', '第6季')."""
+    if not text:
+        return None
+    m_s = re.search(r"\b(?:season|s)\s*0*(\d{1,2})\b", text, re.IGNORECASE)
+    if m_s:
+        try:
+            return int(m_s.group(1))
+        except ValueError:
+            pass
+    m_cn = re.search(r"第\s*([一二三四五六七八九十\d]+)\s*季", text)
+    if m_cn:
+        val = m_cn.group(1)
+        if val.isdigit():
+            return int(val)
+        return CN_SEASON_REVERSE.get(val)
+    return None
+
+
 
 class ZimukuBmpSolver:
     """Recognizes 5 digits of Zimuku's 100x27 BMP verification image using template matching."""
@@ -180,12 +206,18 @@ class ZimukuProvider(BaseProvider):
 
         if meta and meta.is_tv and meta.title:
             if meta.season:
-                candidate_queries.append(f"{meta.title} {to_cn_season(meta.season)}")
-                candidate_queries.append(f"{meta.title} S{meta.season:02d}")
-            candidate_queries.append(meta.title)
-            if meta.alternative_title:
-                if meta.season:
+                s_code = f"{meta.title} S{meta.season:02d}"
+                s_cn = f"{meta.title} {to_cn_season(meta.season)}"
+                if s_code not in candidate_queries:
+                    candidate_queries.insert(0, s_code)
+                if s_cn not in candidate_queries:
+                    candidate_queries.insert(1, s_cn)
+                if meta.alternative_title:
+                    candidate_queries.append(f"{meta.alternative_title} S{meta.season:02d}")
                     candidate_queries.append(f"{meta.alternative_title} {to_cn_season(meta.season)}")
+            if meta.title not in candidate_queries:
+                candidate_queries.append(meta.title)
+            if meta.alternative_title and meta.alternative_title not in candidate_queries:
                 candidate_queries.append(meta.alternative_title)
         elif meta and not meta.is_tv and meta.title:
             if meta.year:
@@ -227,8 +259,20 @@ class ZimukuProvider(BaseProvider):
 
                 logger.info(f"[Zimuku] Found {len(work_items)} works for '{target_query}' on {domain}")
 
+                # If meta is TV and has target season, sort works by season distance
+                if meta and meta.is_tv and meta.season:
+                    def _work_season_distance(work_el) -> int:
+                        title_tag = work_el.select_one("div.title p.tt a")
+                        if not title_tag:
+                            return 999
+                        w_season = extract_season_from_text(title_tag.get_text(strip=True))
+                        if w_season is not None:
+                            return abs(w_season - meta.season)
+                        return 50
+
+                    work_items.sort(key=_work_season_distance)
                 # If meta has a target year, sort works by year distance to prioritize exact year matches
-                if meta and meta.year:
+                elif meta and meta.year:
                     def _work_year_distance(work_el) -> int:
                         title_tag = work_el.select_one("div.title p.tt a")
                         if not title_tag:
@@ -277,22 +321,33 @@ class ZimukuProvider(BaseProvider):
 
         # Extract Douban ID & IMDb ID to enrich metadata
         if meta:
-            # Check year compatibility before binding Douban ID / IMDb ID / Chinese title to meta
-            year_matches = True
-            if meta.year and raw_work_title:
+            # Check year / season compatibility before binding Douban ID / IMDb ID / Chinese title to meta
+            valid_binding = True
+
+            # Season check for TV
+            if meta.is_tv and meta.season and raw_work_title:
+                work_season = extract_season_from_text(raw_work_title)
+                if work_season is not None and work_season != meta.season:
+                    valid_binding = False
+                    logger.warning(
+                        f"[Zimuku] Skipping Douban/IMDb binding: work season {work_season} differs from target season {meta.season} for '{raw_work_title}'"
+                    )
+
+            # Year check for Movies
+            if not meta.is_tv and meta.year and raw_work_title:
                 m_yr = re.search(r"\((\d{4})\)", raw_work_title)
                 if m_yr:
                     try:
                         work_yr = int(m_yr.group(1))
                         if abs(work_yr - meta.year) > 1:
-                            year_matches = False
+                            valid_binding = False
                             logger.warning(
                                 f"[Zimuku] Skipping Douban/IMDb binding: work year {work_yr} differs from target year {meta.year} for '{raw_work_title}'"
                             )
                     except ValueError:
                         pass
 
-            if year_matches:
+            if valid_binding:
                 douban_a = soup.find("a", href=re.compile(r"douban\.com/(?:subject|movie)/(\d+)"))
                 if douban_a:
                     m_douban = re.search(r"/(\d+)", douban_a["href"])
@@ -312,6 +367,11 @@ class ZimukuProvider(BaseProvider):
                     m_cn = re.match(r"^([\u4e00-\u9fa5\s\d第季]+)", raw_work_title)
                     if m_cn:
                         cn_name = m_cn.group(1).strip()
+                        # If TV show, strip out season string like "第二季", "第6季" to get pure show name
+                        if meta.is_tv:
+                            cn_clean = re.sub(r"第\s*[一二三四五六七八九十\d]+\s*季", "", cn_name).strip()
+                            if cn_clean:
+                                cn_name = cn_clean
                         if cn_name and not meta.cn_title:
                             meta.cn_title = cn_name
                             logger.info(f"[Zimuku] Extracted Chinese title: {meta.cn_title}")

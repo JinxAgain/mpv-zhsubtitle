@@ -383,6 +383,49 @@ class TestSearchCache(unittest.TestCase):
         self.assertEqual(test_meta_2010.douban_id, "4135443", "Matching work year (2010) should bind douban_id")
         self.assertEqual(test_meta_2010.cn_title, "恶人")
 
+    def test_tv_season_resolution_and_validation(self):
+        from unittest.mock import MagicMock
+        from zhsubtitle.guess import parse_video
+        from zhsubtitle.models import VideoMeta
+        from zhsubtitle.providers.zimuku import ZimukuProvider
+
+        meta = parse_video("Slow Horses S06E02 Daddy Issues 2160p ATVP WEB-DL DDP5 1 H 265-NTb.mkv")
+        self.assertEqual(meta.title, "Slow Horses")
+        self.assertEqual(meta.season, 6)
+        self.assertEqual(meta.episode, 2)
+        self.assertTrue(meta.is_tv)
+
+        zimuku = ZimukuProvider()
+
+        # 1. Season mismatch (Season 2 vs Season 6) must NOT bind Douban ID
+        work_s2_html = """
+        <html><body>
+            <a href="https://movie.douban.com/subject/35356697/">Douban</a>
+            <div class="subs box clearfix"><tbody></tbody></div>
+        </body></html>
+        """
+        zimuku._fetch_page = MagicMock(return_value=MagicMock(status_code=200, content=work_s2_html.encode("utf-8")))
+        test_meta_s6 = VideoMeta(title="Slow Horses", season=6, is_tv=True)
+        zimuku._parse_work_page("https://srtku.com/subs/63712.html", "https://srtku.com", meta=test_meta_s6, raw_work_title="流人 第二季 Slow Horses Season 2 (2022)")
+        self.assertEqual(test_meta_s6.douban_id, "", "Mismatched TV season (S02 vs S06) should not bind douban_id")
+
+        # 2. Season match (Season 6) must bind Douban ID and clean cn_title
+        work_s6_html = """
+        <html><body>
+            <a href="https://movie.douban.com/subject/36689816/">Douban</a>
+            <div class="subs box clearfix"><tbody></tbody></div>
+        </body></html>
+        """
+        zimuku._fetch_page = MagicMock(return_value=MagicMock(status_code=200, content=work_s6_html.encode("utf-8")))
+        zimuku._parse_work_page("https://srtku.com/subs/78579.html", "https://srtku.com", meta=test_meta_s6, raw_work_title="流人 第六季 Slow Horses Season 6 (2026)")
+        self.assertEqual(test_meta_s6.douban_id, "36689816", "Matching TV season (S06) should bind douban_id")
+        self.assertEqual(test_meta_s6.cn_title, "流人")
+
+        # 3. Test quick chips generation (no double season strings like '流人 第二季 第六季')
+        chips = dict(test_meta_s6.get_search_chips())
+        self.assertIn("Douban ID: 36689816", chips)
+        self.assertEqual(chips["CN Title + Season: 流人 第六季"], "流人 第六季")
+
 
 if __name__ == "__main__":
     unittest.main()

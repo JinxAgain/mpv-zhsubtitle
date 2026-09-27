@@ -43,7 +43,9 @@ class SubtitleService:
         # Stage 1: Query Zimuku to resolve work & extract Douban / IMDb IDs
         if zimuku:
             try:
-                if not meta.is_tv and meta.title and meta.year:
+                if meta.is_tv and meta.title and meta.season:
+                    base_query = f"{meta.title} S{meta.season:02d}"
+                elif not meta.is_tv and meta.title and meta.year:
                     base_query = f"{meta.title} {meta.year}"
                 else:
                     base_query = meta.title or meta.alternative_title or meta.raw_name
@@ -66,8 +68,11 @@ class SubtitleService:
                 best_cn = meta.cn_title or meta.alternative_title
                 if best_cn:
                     if meta.is_tv and meta.season:
-                        subhd_queries.append(f"{best_cn} {to_cn_season(meta.season)}")
-                        subhd_queries.append(f"{best_cn} 第{meta.season}季")
+                        clean_base = re.sub(r"第\s*[一二三四五六七八九十\d]+\s*季", "", best_cn).strip()
+                        clean_base = re.sub(r"\b(?:season|s)\s*0*\d{1,2}\b", "", clean_base, flags=re.IGNORECASE).strip()
+                        clean_base = clean_base or best_cn
+                        subhd_queries.append(f"{clean_base} {to_cn_season(meta.season)}")
+                        subhd_queries.append(f"{clean_base} 第{meta.season}季")
                     elif meta.year:
                         subhd_queries.append(f"{best_cn} {meta.year}")
                     else:
